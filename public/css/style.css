@@ -299,7 +299,9 @@ input,select{font-family:inherit}
 
 /* ── POKER TABLE STAGE ────────────────────────────────────────────────────── */
 .table-stage{
-  flex:1;display:flex;align-items:center;justify-content:center;
+  flex:1 1 0;   /* 1 0 0 causes overflow on Safari — must include shrink basis */
+  min-height:0; /* CRITICAL on Safari: allows flex child to shrink below content size */
+  display:flex;align-items:center;justify-content:center;
   padding:.75rem;overflow:hidden;
   background:
     radial-gradient(ellipse at 50% 80%,rgba(60,30,0,.5),transparent 60%),
@@ -307,10 +309,11 @@ input,select{font-family:inherit}
     #120900;
 }
 
-/* The oval felt table */
+/* The oval felt table — clamped so it never overflows its stage on any device */
 .poker-table{
   position:relative;
   width:min(680px,95vw);
+  max-height:100%;    /* never taller than the stage */
   aspect-ratio:1.6/1;
   background:
     radial-gradient(ellipse at 45% 40%,rgba(70,130,70,.25) 0%,transparent 60%),

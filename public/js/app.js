@@ -723,6 +723,7 @@ $('deck-pile').addEventListener('click',()=>{
 });
 $('btn-knock').addEventListener('click',()=>{
   if(!confirm('Vuoi davvero bussare? Tutti gli altri faranno un ultimo turno.'))return;
+  SFX.play('Knock',0.85);
   socket.emit('game:knock');addLog('Hai bussato!','gold');
 });
 $('btn-discard-drawn').addEventListener('click',discardDrawn);
@@ -1047,7 +1048,7 @@ socket.on('game:attack-window-closed',()=>{ S._attackMode=false; renderMyHand();
 
 // ── Knock ─────────────────────────────────────────────────────────────────
 socket.on('game:knocked',({username})=>{
-  SFX.play('Attacknotify', 0.7);
+  SFX.play('Knock', 0.85); // heard by ALL players
   addLog(`✊ ${username} ha bussato — ultimo giro!`,'gold');
   toast(`✊ ${username} ha bussato!`,'',5000);show($('last-round-pill'));
 });
