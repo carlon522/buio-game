@@ -40,8 +40,8 @@ function startRoomGame(roomId) {
   const room = rooms.get(roomId);
   if (!room || !room.canStart()) return;
   room.startGame();
-  io.to(roomId).emit('game:state', room.getPublicState());
-  io.to(roomId).emit('game:starting');
+  io.to(roomId).emit('game:starting');                     // FIRST — arms client _dealBusy
+  io.to(roomId).emit('game:state', room.getPublicState()); // SECOND — triggers deal animation
   sendPeekToAll(room);
   sendPrivateToAll(room);
   room._peekTimer = setTimeout(() => endPeek(roomId), PEEK_DURATION_MS);

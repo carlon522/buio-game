@@ -205,7 +205,7 @@ socket.on('game:state',state=>{
   // Trigger deal animation when a new peek phase starts
   if(state.phase==='peek' && _dealBusy){
     renderBoard(); renderTurnBanner();
-    _pendingPeek=null;
+    // DO NOT clear _pendingPeek here — game:peek may have already buffered it
     runDealAnimation(()=>{
       _dealBusy=false;
       if(_pendingPeek){ const d=_pendingPeek; _pendingPeek=null; showPeekOverlay(d); }
