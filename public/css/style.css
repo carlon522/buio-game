@@ -73,6 +73,8 @@ input,select{font-family:inherit}
 .brand-logo span{font-style:italic}
 .brand-tagline{font-size:.72rem;color:rgba(255,248,240,.35);margin-top:.4rem;font-style:italic}
 .auth-signoff{font-size:.72rem;color:rgba(255,248,240,.25);text-align:center;margin-top:.25rem;letter-spacing:.03em}
+.lang-toggle{position:fixed;top:.75rem;right:.75rem;z-index:9999;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.6);border-radius:20px;padding:.3rem .75rem;font-size:.78rem;cursor:pointer}
+.lang-toggle:hover{background:rgba(255,255,255,.1);color:#fff}
 .auth-tabs{display:flex;gap:.5rem}
 .auth-tab{flex:1;background:transparent;color:rgba(255,248,240,.4);border:1px solid rgba(196,133,59,.18);padding:.5rem;border-radius:7px;font-weight:600;font-size:.88rem}
 .auth-tab.active{background:rgba(196,133,59,.18);color:var(--gold-lt);border-color:var(--gold)}
@@ -299,14 +301,22 @@ input,select{font-family:inherit}
 
 /* ── POKER TABLE STAGE ────────────────────────────────────────────────────── */
 .table-stage{
-  flex:1 1 0;   /* 1 0 0 causes overflow on Safari — must include shrink basis */
-  min-height:0; /* CRITICAL on Safari: allows flex child to shrink below content size */
+  flex:1 1 0;
+  min-height:0;
   display:flex;align-items:center;justify-content:center;
-  padding:.75rem;overflow:hidden;
-  background:
-    radial-gradient(ellipse at 50% 80%,rgba(60,30,0,.5),transparent 60%),
-    radial-gradient(ellipse at 50% 0%,rgba(196,133,59,.08),transparent 60%),
-    #120900;
+  padding:.65rem;overflow:hidden;
+  /* Custom background images — PC default, mobile via media query */
+  background:url('/background/BackgroundPC.png') center/cover no-repeat;
+  position:relative;
+}
+.table-stage::before{
+  /* Subtle dark overlay so the table reads clearly over the background */
+  content:'';position:absolute;inset:0;
+  background:rgba(0,0,0,.35);pointer-events:none;z-index:0;
+}
+.poker-table{position:relative;z-index:1;} /* table sits above the overlay */
+@media(max-width:768px){
+  .table-stage{background:url('/background/Backgroundmobile.png') center/cover no-repeat}
 }
 
 /* The oval felt table — clamped so it never overflows its stage on any device */
@@ -358,11 +368,11 @@ input,select{font-family:inherit}
 .seat-turn-badge{font-size:.58rem;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .seat-elim-badge{font-size:.75rem}
 
-/* Center of table */
+/* Center of table — generous gap, centered */
 .table-center{
   position:absolute;top:50%;left:50%;
   transform:translate(-50%,-50%);
-  display:flex;align-items:center;gap:1.4rem;
+  display:flex;align-items:center;gap:2rem;
 }
 .t-pile{display:flex;flex-direction:column;align-items:center;gap:.3rem}
 .pile-lbl{font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.25)}
@@ -399,14 +409,22 @@ input,select{font-family:inherit}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 
-/* Game log */
-.game-log{background:rgba(0,0,0,.48);border-radius:8px;padding:.4rem;width:160px;max-height:100px;overflow-y:auto;border:1px solid rgba(196,133,59,.12);font-size:.65rem;display:flex;flex-direction:column;gap:2px;scrollbar-width:thin;scrollbar-color:rgba(196,133,59,.3) transparent}
+/* Game log — absolute corner inside the table, never part of the deck/discard row */
+.game-log{
+  position:absolute;bottom:.6rem;right:.6rem;z-index:5;
+  background:rgba(0,0,0,.6);border-radius:8px;padding:.4rem .5rem;
+  width:160px;max-height:105px;overflow-y:auto;
+  border:1px solid rgba(196,133,59,.15);font-size:.64rem;
+  display:flex;flex-direction:column;gap:2px;
+  scrollbar-width:thin;scrollbar-color:rgba(196,133,59,.3) transparent;
+}
 .game-log::-webkit-scrollbar{width:3px}
 .game-log::-webkit-scrollbar-thumb{background:rgba(196,133,59,.3);border-radius:2px}
 .log-entry{padding:.1rem .3rem;border-radius:3px;line-height:1.35;color:rgba(255,248,240,.4)}
 .log-entry.success{color:var(--success)}
 .log-entry.danger{color:var(--danger)}
 .log-entry.gold{color:var(--gold-lt)}
+.log-entry.chat{color:#74b9e7;font-style:italic}
 
 /* ── MY AREA ─────────────────────────────────────────────────────────────── */
 .my-area{flex-shrink:0;background:rgba(0,0,0,.5);border-top:1px solid rgba(196,133,59,.15);display:flex;flex-direction:column;gap:.4rem;padding:.5rem .75rem calc(.6rem + env(safe-area-inset-bottom,.5rem))}
@@ -492,6 +510,32 @@ input,select{font-family:inherit}
 .prp-value{font-size:.82rem;color:rgba(255,248,240,.55)}
 .prp-prog-wrap{width:120px;height:4px;background:rgba(255,255,255,.18);border-radius:2px;overflow:hidden}
 .prp-prog{height:100%;background:var(--gold);border-radius:2px}
+
+/* ── Chat ────────────────────────────────────────────────────────────────── */
+.chat-toggle{
+  position:fixed;bottom:5.5rem;left:.6rem;z-index:9500;
+  background:rgba(0,0,0,.6);border:1px solid rgba(52,152,219,.3);
+  color:rgba(255,248,240,.5);border-radius:50%;width:32px;height:32px;
+  font-size:.88rem;display:flex;align-items:center;justify-content:center;cursor:pointer;
+}
+.chat-toggle:hover{background:rgba(52,152,219,.2);color:#74b9e7}
+.chat-bar{
+  position:fixed;bottom:1rem;left:.6rem;z-index:9500;
+  display:flex;gap:.35rem;align-items:center;
+  background:rgba(8,4,0,.92);border:1px solid rgba(52,152,219,.3);
+  border-radius:10px;padding:.35rem .5rem;width:min(280px,85vw);
+  box-shadow:0 4px 16px rgba(0,0,0,.5);
+}
+.chat-input{
+  flex:1;background:transparent;border:none;color:var(--cream);
+  font-size:.82rem;font-family:inherit;outline:none;
+}
+.chat-input::placeholder{color:rgba(255,255,255,.3)}
+.chat-send{
+  background:rgba(52,152,219,.2);border:1px solid rgba(52,152,219,.4);
+  color:#74b9e7;border-radius:6px;padding:.2rem .5rem;font-size:.8rem;cursor:pointer;flex-shrink:0;
+}
+.chat-send:hover{background:rgba(52,152,219,.4)}
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 .toast-area{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:.4rem;z-index:9000;align-items:center;pointer-events:none}

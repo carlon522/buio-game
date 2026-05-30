@@ -1187,6 +1187,31 @@ function checkOppCardChanges(newState) {
   });
 }
 
+// ── Chat ─────────────────────────────────────────────────────────────────
+let _chatOpen = false;
+function chatToggle(force) {
+  _chatOpen = force !== undefined ? force : !_chatOpen;
+  _chatOpen ? show($('chat-bar')) : hide($('chat-bar'));
+  if (_chatOpen) $('chat-input')?.focus();
+}
+$('chat-toggle').addEventListener('click', () => chatToggle());
+$('chat-send').addEventListener('click', sendChat);
+$('chat-input').addEventListener('keydown', e => { if(e.key==='Enter') sendChat(); if(e.key==='Escape') chatToggle(false); });
+document.addEventListener('keydown', e => {
+  if (e.key==='c' && !e.ctrlKey && !e.altKey && !e.shiftKey && document.activeElement.tagName!=='INPUT') chatToggle();
+});
+function sendChat() {
+  const inp = $('chat-input');
+  const txt = inp?.value.trim();
+  if (!txt) return;
+  socket.emit('game:chat', { text: txt });
+  inp.value = '';
+}
+socket.on('game:chat-msg', ({username, text}) => {
+  addLog(`💬 ${esc(username)}: ${esc(text)}`, 'chat');
+  if (username !== S.username) toast(`💬 ${esc(username)}: ${esc(text)}`, '', 4000);
+});
+
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 // ── Debug panel ───────────────────────────────────────────────────────────
@@ -1277,8 +1302,70 @@ window.buioTest = {
 };
 console.log('%c🃏 buioTest ready: play(), autoPlay(), state(), testReveal(), testSwap()', 'color:#F0A030;font-weight:bold');
 
+// ── Language switcher (IT ↔ EN) ───────────────────────────────────────────
+const TRANSLATIONS = {
+  en: {
+    'brand-tagline':    'Your memory is your light, strategy your guide.',
+    'login-username':   'Username',     // placeholder
+    'login-password':   'Password',
+    'reg-username':     'Choose username (min 3)',
+    'reg-password':     'Password (min 6)',
+    'btn-vs-bot':       '🤖 Play vs Bot — Quick Start',
+    'btn-create-room':  'Create Room',
+    'btn-refresh':      '↻ Refresh',
+    'tab-login':        'Login',
+    'tab-register':     'Register',
+    'submit-login':     'Enter the Game',
+    'submit-register':  'Create Account',
+    'auth-signoff':     'Made with ❤️ by Carlo',
+  }
+};
+let _lang = localStorage.getItem('buio_lang') || 'it';
+
+function toggleLang() {
+  _lang = _lang === 'it' ? 'en' : 'it';
+  localStorage.setItem('buio_lang', _lang);
+  applyLang();
+}
+window.toggleLang = toggleLang;
+
+function applyLang() {
+  const btn = $('lang-toggle');
+  if (!btn) return;
+  const en = _lang === 'en';
+  btn.textContent = en ? '🌐 IT' : '🌐 EN';
+
+  // brand tagline
+  const tagline = document.querySelector('.brand-tagline');
+  if (tagline) tagline.textContent = en ? TRANSLATIONS.en['brand-tagline'] : 'La tua memoria è la tua luce, la strategia la tua guida.';
+
+  // form placeholders
+  const lp = { 'login-username':en?'Username':'Username', 'login-password':en?'Password':'Password',
+                'reg-username':en?'Choose username (min 3)':'Scegli username (min 3)', 'reg-password':en?'Password (min 6)':'Password (min 6)' };
+  for (const [id,ph] of Object.entries(lp)) { const el=$(id); if(el) el.placeholder=ph; }
+
+  // tabs
+  document.querySelectorAll('.auth-tab').forEach(t => {
+    if(t.dataset.tab==='login')    t.textContent = en?'Login':'Accedi';
+    if(t.dataset.tab==='register') t.textContent = en?'Register':'Registrati';
+  });
+
+  // submit buttons
+  const sl = document.querySelector('#form-login button[type=submit]');
+  const sr = document.querySelector('#form-register button[type=submit]');
+  if(sl) sl.textContent = en?'Enter the Game':'Entra nel Gioco';
+  if(sr) sr.textContent = en?'Create Account':'Crea Account';
+
+  // lobby button
+  const vb=$('btn-vs-bot'); if(vb) vb.textContent=en?'🤖 Play vs Bot — Quick Start':'🤖 Gioca vs Bot — Partenza Rapida';
+
+  // signoff
+  const so=document.querySelector('.auth-signoff'); if(so) so.textContent='Made with ❤️ by Carlo';
+}
+
 (function(){
   S._selIdx=-1;
+  applyLang(); // apply saved language on load
   // Set mute button icon from saved preference
   const btn=$('mute-btn');
   if(btn) btn.textContent = SFX.muted ? '🔇' : '🔊';

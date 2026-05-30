@@ -12,6 +12,7 @@
 <!-- ════ AUTH ══════════════════════════════════════════════════════════════ -->
 <div id="screen-auth" class="screen active">
   <div class="auth-bg"></div>
+  <button id="lang-toggle" class="lang-toggle" onclick="toggleLang()">🌐 EN</button>
   <div class="auth-card">
     <div class="brand">
       <div class="brand-logo">B<span>u</span>io</div>
@@ -187,7 +188,7 @@
         <!-- Opponents are injected here by JS at the correct seat positions -->
         <div id="seats-container" class="seats-container"></div>
 
-        <!-- Center of table: deck + discard + log -->
+        <!-- Center of table: deck + discard only (log moved outside flex row) -->
         <div class="table-center">
           <div class="t-pile">
             <div class="pile-lbl">MAZZO</div>
@@ -205,8 +206,9 @@
               <div class="discard-empty">—</div>
             </div>
           </div>
-          <div id="game-log" class="game-log"></div>
         </div>
+        <!-- Log floats in corner of the table, not inside the center row -->
+        <div id="game-log" class="game-log"></div>
 
       </div><!-- /poker-table -->
     </div><!-- /table-stage -->
@@ -241,6 +243,13 @@
     </div>
 
   </div><!-- /game-board -->
+
+  <!-- Chat bar (bottom-left, overlays game board) -->
+  <div id="chat-bar" class="chat-bar hidden">
+    <input id="chat-input" class="chat-input" type="text" placeholder="Scrivi un messaggio…" maxlength="120" autocomplete="off">
+    <button id="chat-send" class="chat-send">➤</button>
+  </div>
+  <button id="chat-toggle" class="chat-toggle" title="Chat (C)">💬</button>
 
   <div id="toast-area" class="toast-area"></div>
 

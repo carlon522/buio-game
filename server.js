@@ -589,6 +589,15 @@ io.on('connection', socket => {
     // No window timer â€” attack can happen again any time
   });
 
+  // ── Chat ─────────────────────────────────────────────────────────────────
+  socket.on('game:chat', ({ text } = {}) => {
+    if (!me || !text?.trim()) return;
+    const room = getMyRoom();
+    if (!room) return;
+    const msg = text.trim().slice(0, 120); // max 120 chars
+    io.to(room.id).emit('game:chat-msg', { username: me.username, text: msg });
+  });
+
   socket.on('game:knock', () => {
     if (!me) return;
     const room = getMyRoom();
