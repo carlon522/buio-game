@@ -42,7 +42,9 @@ function addLog(text, type='info') {
 }
 function renderLog() {
   const el=$('game-log'); if(!el)return;
-  el.innerHTML=S.gameLog.slice(0,12).map(e=>`<div class="log-entry ${e.type}">${esc(e.text)}</div>`).join('');
+  // Horizontal strip: newest event at left, older entries to the right
+  el.innerHTML=S.gameLog.slice(0,15).map((e,i)=>`<span class="log-entry ${e.type}"${i>0?' style="opacity:.55"':''}>${esc(e.text)}</span>`).join('<span style="color:rgba(255,255,255,.15);flex-shrink:0">·</span>');
+  el.scrollLeft=0;
 }
 
 // ── Card HTML ─────────────────────────────────────────────────────────────

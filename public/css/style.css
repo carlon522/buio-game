@@ -409,22 +409,28 @@ input,select{font-family:inherit}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 
-/* Game log — absolute corner inside the table, never part of the deck/discard row */
-.game-log{
-  position:absolute;bottom:.6rem;right:.6rem;z-index:5;
-  background:rgba(0,0,0,.6);border-radius:8px;padding:.4rem .5rem;
-  width:160px;max-height:105px;overflow-y:auto;
-  border:1px solid rgba(196,133,59,.15);font-size:.64rem;
-  display:flex;flex-direction:column;gap:2px;
-  scrollbar-width:thin;scrollbar-color:rgba(196,133,59,.3) transparent;
+/* Activity bar — single horizontal scrolling strip between table and hand */
+.activity-bar{
+  flex-shrink:0;
+  display:flex;align-items:center;gap:.6rem;
+  overflow-x:auto;white-space:nowrap;
+  padding:.28rem .75rem;
+  background:rgba(0,0,0,.42);
+  border-top:1px solid rgba(196,133,59,.1);
+  border-bottom:1px solid rgba(196,133,59,.08);
+  scrollbar-width:none;min-height:22px;
 }
-.game-log::-webkit-scrollbar{width:3px}
-.game-log::-webkit-scrollbar-thumb{background:rgba(196,133,59,.3);border-radius:2px}
-.log-entry{padding:.1rem .3rem;border-radius:3px;line-height:1.35;color:rgba(255,248,240,.4)}
+.activity-bar::-webkit-scrollbar{display:none}
+.log-entry{
+  font-size:.64rem;color:rgba(255,248,240,.42);
+  flex-shrink:0;padding:.05rem .3rem;border-radius:3px;
+}
 .log-entry.success{color:var(--success)}
 .log-entry.danger{color:var(--danger)}
 .log-entry.gold{color:var(--gold-lt)}
 .log-entry.chat{color:#74b9e7;font-style:italic}
+/* Latest entry slightly brighter */
+.log-entry:first-child{color:rgba(255,248,240,.7)}
 
 /* ── MY AREA ─────────────────────────────────────────────────────────────── */
 .my-area{flex-shrink:0;background:rgba(0,0,0,.5);border-top:1px solid rgba(196,133,59,.15);display:flex;flex-direction:column;gap:.4rem;padding:.5rem .75rem calc(.6rem + env(safe-area-inset-bottom,.5rem))}
@@ -576,23 +582,28 @@ input,select{font-family:inherit}
 
 @media(max-width:600px){
   :root{--cw:54px;--ch:82px}
-  .poker-table{aspect-ratio:1.4/1;width:min(420px,98vw)}
-  .table-center{gap:.75rem}
-  .game-log{width:120px;max-height:80px}
-  .my-hand{gap:.28rem}
+  /* Table fills the full width on mobile — no wasted margin */
+  .poker-table{aspect-ratio:1.3/1;width:100vw;border-radius:40%/30%;border-width:8px}
+  .table-stage{padding:.2rem 0}  /* minimal side padding so table is max size */
+  .table-center{gap:.9rem}
+  .seats-container .seat-info{padding:.25rem .45rem;min-width:52px}
+  .mini-card{width:24px;height:37px}
+  .my-hand{gap:.25rem}
   .ov-card{padding:1.4rem}
   .lobby-main{grid-template-columns:1fr}
   .lobby-create-panel{order:2}
   .lobby-list-panel{order:1}
 }
+@media(min-width:601px) and (max-width:900px){
+  :root{--cw:62px;--ch:95px}
+  .poker-table{width:min(580px,98vw);aspect-ratio:1.5/1}
+}
 @media(min-width:900px){
   :root{--cw:76px;--ch:116px}
-  .poker-table{aspect-ratio:2/1.1}
+  .poker-table{aspect-ratio:1.8/1}
   .table-center{gap:2rem}
-  .game-log{width:185px;max-height:115px}
 }
 @media(min-width:1200px){
   :root{--cw:84px;--ch:128px}
-  .poker-table{aspect-ratio:2/1}
-  .game-log{width:200px;max-height:120px}
+  .poker-table{aspect-ratio:1.7/1}
 }
