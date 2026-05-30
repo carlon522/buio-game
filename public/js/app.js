@@ -489,6 +489,9 @@ function renderMyHand() {
     $('drawn-card-display').innerHTML=cardHTML(S.drawnCard,{cls:'clickable anim-appear',index:-1});
     $('drawn-card-display').querySelector('.card-3d')?.addEventListener('click',()=>{ if(phase==='discard'&&isMe) discardDrawn(); });
   } else hide(slot);
+
+  // Update overflow arrow after hand renders
+  requestAnimationFrame(updateHandOverflow);
 }
 
 function renderScore() {
@@ -1188,6 +1191,20 @@ function checkOppCardChanges(newState) {
     _prevCounts[p.userId] = p.cardCount;
   });
 }
+
+// ── Hand overflow indicator ───────────────────────────────────────────────
+function updateHandOverflow() {
+  const hand=$('my-hand'), arrow=$('hand-arrow'), track=$('hand-scroll-track'), thumb=$('hand-scroll-thumb');
+  if(!hand||!arrow) return;
+  const hasOv = hand.scrollWidth > hand.clientWidth+2;
+  if(hasOv) arrow.classList.remove('hidden'); else arrow.classList.add('hidden');
+  if(track&&thumb){
+    if(hasOv){ show(track); const r=hand.clientWidth/hand.scrollWidth; const s=hand.scrollLeft/(hand.scrollWidth-hand.clientWidth||1); thumb.style.width=(r*100)+'%'; thumb.style.marginLeft=(s*(1-r)*100)+'%'; }
+    else hide(track);
+  }
+}
+// Wire scroll listener once (after DOM ready)
+setTimeout(()=>{ $('my-hand')?.addEventListener('scroll',updateHandOverflow); },1000);
 
 // ── Chat ─────────────────────────────────────────────────────────────────
 let _chatOpen = false;

@@ -445,19 +445,30 @@ input,select{font-family:inherit}
 .score-pill.low{border-color:var(--success);color:#2ecc71}
 .score-pill.high{border-color:var(--danger);color:#ff7675}
 .penalized-pill{font-size:.68rem;background:rgba(243,156,18,.14);border:1px solid rgba(243,156,18,.38);color:#f39c12;padding:.18rem .5rem;border-radius:6px;font-weight:700}
-/* Left-anchor the hand so cards never shift when the drawn-slot appears/disappears */
-.my-cards-row{display:flex;align-items:flex-end;gap:.85rem;justify-content:flex-start}
-/* align-items:flex-end allows raised cards to float upward without pushing row height */
-.my-hand{display:flex;gap:.4rem;justify-content:flex-start;flex-wrap:nowrap;align-items:flex-end;padding-top:38px}
-/* drawn-slot always reserves its width — use visibility, not display, to hide it */
-.drawn-slot{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
-/* Constrain drawn-card display so it never exceeds hand card size */
+/* Hand area */
+.my-cards-row{display:flex;align-items:flex-end;gap:0;justify-content:flex-start;position:relative;overflow:hidden}
+.my-hand{display:flex;gap:.4rem;justify-content:flex-start;flex-wrap:nowrap;align-items:flex-end;padding-top:38px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex:1 1 0;min-width:0}
+.my-hand::-webkit-scrollbar{display:none}
+
+/* Right-edge overflow arrow */
+.hand-overflow-arrow{position:absolute;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;width:2.2rem;background:linear-gradient(to right,transparent,rgba(0,0,0,.82));font-size:1.2rem;color:rgba(255,255,255,.4);padding-right:.2rem;pointer-events:none;transition:opacity .2s}
+
+/* Scroll track */
+.hand-scroll-track{height:2px;background:rgba(255,255,255,.08);border-radius:1px;margin:.2rem .4rem 0}
+.hand-scroll-thumb{height:100%;background:rgba(196,133,59,.45);border-radius:1px;transition:all .12s}
+
+/* Drawn slot: divider + label above card */
+.drawn-slot{display:flex;align-items:stretch;flex-shrink:0}
+#drawn-slot.hidden{display:flex!important;visibility:hidden;pointer-events:none;opacity:0}
+.drawn-divider{width:1px;background:rgba(196,133,59,.25);align-self:stretch;margin:4px .5rem;flex-shrink:0}
+.drawn-inner{display:flex;flex-direction:column;align-items:center;gap:.15rem}
+.drawn-lbl{font-size:.56rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:rgba(255,255,255,.3);text-align:center}
 #drawn-card-display{width:var(--cw);height:var(--ch);flex-shrink:0}
 #drawn-card-display .card-3d{width:var(--cw)!important;height:var(--ch)!important}
-/* Override .hidden for drawn-slot: keep layout space, just go invisible */
-#drawn-slot.hidden{display:flex!important;visibility:hidden;pointer-events:none;opacity:0}
-.drawn-lbl{font-size:.62rem;color:rgba(255,248,240,.38);text-align:center;line-height:1.4}
-.drawn-lbl span{font-size:.55rem;opacity:.7}
+
+/* Chat toggle in info bar */
+.chat-toggle-inline{background:rgba(52,152,219,.15);border:1px solid rgba(52,152,219,.28);color:#74b9e7;border-radius:8px;padding:.18rem .45rem;font-size:.85rem;cursor:pointer;flex-shrink:0;touch-action:manipulation}
+.chat-toggle-inline:hover{background:rgba(52,152,219,.3)}
 .action-bar{display:flex;gap:.45rem;justify-content:flex-start;align-items:center;flex-wrap:wrap}
 .action-hint{font-size:.7rem;color:rgba(255,248,240,.35);width:100%;text-align:left}
 

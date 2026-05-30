@@ -223,14 +223,26 @@
         </div>
         <div id="score-pill" class="score-pill"></div>
         <div id="penalized-pill" class="penalized-pill hidden">⚠ Penalizzato</div>
+        <!-- Chat button lives in the info bar, above the hand -->
+        <button id="chat-toggle" class="chat-toggle-inline" title="Chat (C)">💬</button>
       </div>
 
-      <div class="my-cards-row">
+      <div class="my-cards-row" id="my-cards-row">
         <div id="my-hand" class="my-hand"></div>
+        <!-- Overflow arrow — shown by JS when hand scrolls -->
+        <div class="hand-overflow-arrow" id="hand-arrow">›</div>
+        <!-- Drawn card: divider + label above card -->
         <div id="drawn-slot" class="drawn-slot hidden">
-          <div class="drawn-lbl">Pescata<br><span>clicca per scartare</span></div>
-          <div id="drawn-card-display"></div>
+          <div class="drawn-divider"></div>
+          <div class="drawn-inner">
+            <div class="drawn-lbl">Pescata</div>
+            <div id="drawn-card-display"></div>
+          </div>
         </div>
+      </div>
+      <!-- Scroll progress track (only visible when hand overflows) -->
+      <div class="hand-scroll-track hidden" id="hand-scroll-track">
+        <div class="hand-scroll-thumb" id="hand-scroll-thumb"></div>
       </div>
 
       <div id="action-bar" class="action-bar">
@@ -249,8 +261,6 @@
     <input id="chat-input" class="chat-input" type="text" placeholder="Scrivi un messaggio…" maxlength="120" autocomplete="off">
     <button id="chat-send" class="chat-send">➤</button>
   </div>
-  <button id="chat-toggle" class="chat-toggle" title="Chat (C)">💬</button>
-
   <div id="toast-area" class="toast-area"></div>
 
   <!-- Debug toggle button (always visible in game) -->
