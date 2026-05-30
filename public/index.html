@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0e0800">
+<title>BUIO – Gioco di Carte</title>
+<link rel="stylesheet" href="/css/style.css?v=21">
+</head>
+<body>
+
+<!-- ════ AUTH ══════════════════════════════════════════════════════════════ -->
+<div id="screen-auth" class="screen active">
+  <div class="auth-bg"></div>
+  <div class="auth-card">
+    <div class="brand">
+      <div class="brand-logo">B<span>u</span>io</div>
+      <p class="brand-tagline">La tua memoria è la tua luce.</p>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">Accedi</button>
+      <button class="auth-tab" data-tab="register">Registrati</button>
+    </div>
+    <form id="form-login" class="auth-form">
+      <div class="field"><label>Username</label><input type="text" id="login-username" autocomplete="username" placeholder="Username" required></div>
+      <div class="field"><label>Password</label><input type="password" id="login-password" autocomplete="current-password" placeholder="Password" required></div>
+      <div id="login-error" class="form-error"></div>
+      <button type="submit" class="btn-primary">Entra nel Gioco</button>
+    </form>
+    <form id="form-register" class="auth-form hidden">
+      <div class="field"><label>Username</label><input type="text" id="reg-username" autocomplete="username" placeholder="Scegli username (min 3)" required></div>
+      <div class="field"><label>Password</label><input type="password" id="reg-password" autocomplete="new-password" placeholder="Password (min 6)" required></div>
+      <div id="reg-error" class="form-error"></div>
+      <button type="submit" class="btn-primary">Crea Account</button>
+    </form>
+  </div>
+</div>
+
+<!-- ════ LOBBY ═════════════════════════════════════════════════════════════ -->
+<div id="screen-lobby" class="screen hidden">
+  <header class="lobby-header">
+    <div class="brand-small">🃏 BUIO</div>
+    <div class="user-info"><span id="lobby-username"></span><button id="btn-logout" class="btn-ghost">Esci</button></div>
+  </header>
+  <main class="lobby-main">
+    <div class="lobby-create-panel">
+      <h2>➕ Crea Partita</h2>
+      <div class="field"><label>Nome Stanza</label><input type="text" id="room-name" placeholder="Es. Partita di Napoli" maxlength="30"></div>
+      <div class="field"><label>Giocatori (2–8)</label>
+        <select id="room-max-players">
+          <option value="2">2</option><option value="3">3</option>
+          <option value="4" selected>4</option><option value="5">5</option>
+          <option value="6">6</option><option value="7">7</option><option value="8">8</option>
+        </select>
+      </div>
+      <button id="btn-create-room" class="btn-primary">Crea Stanza</button>
+      <button id="btn-vs-bot" class="btn-bot">🤖 Gioca vs Bot — Partenza Rapida</button>
+      <div class="rules-box">
+        <h3>📖 Come si gioca</h3>
+        <ul>
+          <li>4 carte coperte — sbircia le <b>prime 2</b> all'inizio</li>
+          <li>Pesca dal mazzo, poi scarta — tieni basso il punteggio (A=1 … Re=10)</li>
+          <li><b>⚔ Attacca</b> in qualsiasi momento se hai la stessa carta scartata</li>
+          <li><b>✊ Busso</b> quando sei sicuro di avere pochi punti</li>
+          <li>Chi ha più punti perde ❤ — 3 vite in totale</li>
+          <li><b>Carte speciali (quando vengono scartate):</b></li>
+          <li>🔄 Otto: scambia una tua carta con quella di un avversario</li>
+          <li>🔍 Nove: sbircia una tua carta coperta</li>
+          <li>🔟 Dieci: il prossimo giocatore scarta prima di pescare</li>
+        </ul>
+      </div>
+    </div>
+    <div class="lobby-list-panel">
+      <div class="lobby-list-header"><h2>🎮 Partite Disponibili</h2><button id="btn-refresh" class="btn-ghost">↻</button></div>
+      <div id="room-list" class="room-list"><div class="empty-state">Nessuna partita.<br>Creane una!</div></div>
+    </div>
+  </main>
+</div>
+
+<!-- ════ GAME ══════════════════════════════════════════════════════════════ -->
+<div id="screen-game" class="screen hidden">
+
+  <!-- ── OVERLAYS ──────────────────────────────────────────────────────── -->
+  <div id="panel-waiting" class="panel-overlay hidden">
+    <div class="ov-card">
+      <div class="brand-small">🃏 BUIO</div>
+      <h2 id="waiting-room-name">Stanza</h2>
+      <div id="waiting-player-list" class="waiting-players"></div>
+      <div class="ov-footer">
+        <button id="btn-start-game" class="btn-primary hidden">▶ Inizia Partita</button>
+        <button id="btn-add-bot"   class="btn-bot hidden">🤖 Aggiungi Bot</button>
+        <p id="waiting-hint" class="hint-text"></p>
+        <button id="btn-leave-room" class="btn-ghost">← Lascia</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-peek" class="panel-overlay hidden">
+    <div class="ov-card">
+      <div class="peek-icon">👁</div>
+      <h2>Memorizza le tue carte!</h2>
+      <p class="hint-text">Hai <strong id="peek-timer-val">10</strong>s — poi tornano coperte per sempre!</p>
+      <div id="peek-cards" class="peek-cards-row"></div>
+      <div class="peek-bar-wrap"><div id="peek-progress" class="peek-bar"></div></div>
+      <button id="btn-ready" class="btn-primary">✓ Ho memorizzato</button>
+    </div>
+  </div>
+
+  <div id="panel-special" class="panel-overlay hidden">
+    <div class="ov-card">
+      <div id="special-card-preview" class="special-preview"></div>
+      <h2 id="special-title"></h2>
+      <p id="special-desc" class="hint-text"></p>
+      <div id="special-actions" class="special-actions"></div>
+      <button id="btn-special-skip" class="btn-ghost skip-btn">Salta</button>
+    </div>
+  </div>
+
+  <div id="panel-scoring" class="panel-overlay hidden">
+    <div class="ov-card">
+      <h2>📊 Fine Round <span id="scoring-round"></span></h2>
+      <div id="scoring-knocked-info" class="scoring-knocked hidden"></div>
+      <div id="scoring-list" class="scoring-list"></div>
+      <div class="ov-footer">
+        <button id="btn-next-round" class="btn-primary hidden">▶ Prossimo Round</button>
+        <p id="scoring-hint" class="hint-text"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-gameover" class="panel-overlay hidden">
+    <div class="ov-card">
+      <div class="trophy">🏆</div>
+      <h2 id="gameover-text"></h2>
+      <div id="gameover-scores" class="scoring-list"></div>
+      <button id="btn-back-lobby" class="btn-primary">← Lobby</button>
+    </div>
+  </div>
+
+  <!-- ── GAME BOARD ─────────────────────────────────────────────────────── -->
+  <div id="game-board" class="game-board">
+
+    <!-- Top HUD bar -->
+    <div id="turn-banner" class="turn-banner neutral">
+      <div class="tb-left">
+        <div class="tb-avatar" id="tb-avatar">?</div>
+        <div class="tb-text">
+          <div class="tb-title" id="tb-title">—</div>
+          <div class="tb-sub"   id="tb-sub">—</div>
+        </div>
+      </div>
+      <div class="tb-right">
+        <div id="tb-badge" class="tb-badge hidden"></div>
+        <div class="round-pill">Round <span id="info-round">1</span></div>
+        <div id="last-round-pill" class="last-round-pill hidden">⚡ ULTIMO GIRO</div>
+        <button id="mute-btn" class="mute-btn" title="Muto/Suono (M)" onclick="SFX.toggle()">🔊</button>
+      </div>
+    </div>
+
+    <!-- Attack bars (between banner and table) -->
+    <div id="attack-window" class="attack-bar hidden">
+      <div id="atk-disc-inline" class="atk-disc-inline"></div>
+      <div class="atk-mid">
+        <span id="atk-label" class="atk-label"></span>
+        <div class="atk-prog-wrap"><div id="attack-progress" class="atk-prog"></div></div>
+      </div>
+      <span id="atk-countdown" class="atk-cd">6</span>
+    </div>
+
+    <div id="attack-announce-bar" class="ann-bar hidden">
+      <span class="ann-sword">⚔</span>
+      <div class="ann-mid">
+        <div class="ann-title" id="ann-title"></div>
+        <div class="ann-sub"   id="ann-sub"></div>
+      </div>
+      <div class="ann-right">
+        <div class="ann-prog-wrap"><div id="ann-progress" class="ann-prog"></div></div>
+        <span id="ann-cd" class="ann-cd">30</span>
+      </div>
+    </div>
+
+    <!-- POKER TABLE — the main stage -->
+    <div class="table-stage">
+      <div class="poker-table" id="poker-table">
+
+        <!-- Opponents are injected here by JS at the correct seat positions -->
+        <div id="seats-container" class="seats-container"></div>
+
+        <!-- Center of table: deck + discard + log -->
+        <div class="table-center">
+          <div class="t-pile">
+            <div class="pile-lbl">MAZZO</div>
+            <div class="deck-wrap" id="deck-pile" title="Clicca per pescare">
+              <div class="deck-layer dl3"></div>
+              <div class="deck-layer dl2"></div>
+              <div class="deck-layer dl1"></div>
+              <div class="deck-badge" id="deck-count">40</div>
+            </div>
+          </div>
+          <div class="t-arrow">→</div>
+          <div class="t-pile">
+            <div class="pile-lbl">SCARTI</div>
+            <div class="discard-slot" id="discard-pile">
+              <div class="discard-empty">—</div>
+            </div>
+          </div>
+          <div id="game-log" class="game-log"></div>
+        </div>
+
+      </div><!-- /poker-table -->
+    </div><!-- /table-stage -->
+
+    <!-- MY AREA — fixed at bottom -->
+    <div class="my-area">
+      <div class="my-info-bar">
+        <div class="my-identity">
+          <div class="my-av" id="my-av">?</div>
+          <span class="my-name" id="my-name-display">—</span>
+          <div id="my-lives" class="lives-display"></div>
+        </div>
+        <div id="score-pill" class="score-pill"></div>
+        <div id="penalized-pill" class="penalized-pill hidden">⚠ Penalizzato</div>
+      </div>
+
+      <div class="my-cards-row">
+        <div id="my-hand" class="my-hand"></div>
+        <div id="drawn-slot" class="drawn-slot hidden">
+          <div class="drawn-lbl">Pescata<br><span>clicca per scartare</span></div>
+          <div id="drawn-card-display"></div>
+        </div>
+      </div>
+
+      <div id="action-bar" class="action-bar">
+        <button id="btn-draw"          class="btn-action btn-draw hidden">🂠 Pesca</button>
+        <button id="btn-knock"         class="btn-action btn-knock hidden">✊ Busso</button>
+        <button id="btn-attack"        class="btn-action btn-attack hidden">⚔ Attacca!</button>
+        <button id="btn-discard-drawn" class="btn-action btn-disc hidden">↓ Scarta</button>
+        <div id="action-hint" class="action-hint"></div>
+      </div>
+    </div>
+
+  </div><!-- /game-board -->
+
+  <div id="toast-area" class="toast-area"></div>
+
+  <!-- Debug toggle button (always visible in game) -->
+  <button id="debug-toggle" class="debug-toggle" title="Debug (Ctrl+Shift+D)">🐛</button>
+
+  <!-- Debug panel -->
+  <div id="debug-panel" class="debug-panel hidden">
+    <div class="dp-head">
+      <span id="dp-title">🐛 DEBUG</span>
+      <div style="display:flex;gap:.4rem">
+        <button class="dp-btn" onclick="dbRefresh()">↻</button>
+        <button class="dp-btn" onclick="dbToggle()">×</button>
+      </div>
+    </div>
+    <div id="dp-body" class="dp-body">Premi ↻ per caricare</div>
+    <div class="dp-actions">
+      <button class="dp-btn" onclick="buioTest.play()">▶ Turno</button>
+      <button class="dp-btn" id="dp-auto-btn" onclick="buioTest.autoPlay()">⏩ Auto</button>
+      <button class="dp-btn" onclick="buioTest.testReveal(true)">✅ Reveal</button>
+      <button class="dp-btn" onclick="buioTest.testReveal(false)">❌ Reveal</button>
+      <button class="dp-btn" onclick="buioTest.testSwap()">🔄 Swap</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/app.js?v=21"></script>
+</body>
+</html>
