@@ -14,6 +14,7 @@ const S = {
   _animSlot:null,           // visual slot currently receiving an animation (stay hidden during re-renders)
   _skipDiscard:false,       // true while a card is flying TO the discard pile
   _pendingDiscardCard:null, // card to show in pile once animation completes
+  _attackRevealActive:false,// true during the 5s attack reveal overlay — ALL actions paused
   gameLog:[], _selIdx:-1,
   _atkCdInt:null,
 };
@@ -209,6 +210,7 @@ socket.on('game:state',state=>{
     renderBoard(); renderTurnBanner();
     // DO NOT clear _pendingPeek here — game:peek may have already buffered it
     runDealAnimation(()=>{
+      clearTimeout(window._dealBusyFallback);
       _dealBusy=false;
       if(_pendingPeek){ const d=_pendingPeek; _pendingPeek=null; showPeekOverlay(d); }
     });
@@ -231,9 +233,12 @@ socket.on('game:turn-start',({userId,username})=>{
   addLog(`Turno di ${username}`,'info');
 });
 socket.on('game:starting',()=>{
-  _dealBusy=true; _pendingPeek=null; // arm deal animation for the upcoming peek
+  _dealBusy=true; _pendingPeek=null;
+  // Safety: if game:state/peek never arrives, unlock after 20s
+  clearTimeout(window._dealBusyFallback);
+  window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
-  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;
+  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -513,6 +518,8 @@ function renderActions() {
   const hint=$('action-hint');
   hide($('btn-draw'));hide($('btn-knock'));hide($('btn-attack'));hide($('btn-discard-drawn'));
   hint.textContent='';
+  // All actions frozen during attack reveal overlay
+  if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
 
   if(phase==='draw'&&isMe){ show($('btn-draw'));show($('btn-knock')); }
   if(phase==='discard'&&isMe&&S.drawnCard){ show($('btn-discard-drawn')); }
@@ -533,6 +540,7 @@ function renderActions() {
 
 // ── Hand click ────────────────────────────────────────────────────────────
 function onHandClick(visualIdx) {
+  if(S._attackRevealActive) return; // reveal in progress — ignore all input
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
   const cardEl=$('my-hand').querySelectorAll('.card-3d')[visualIdx];
@@ -677,7 +685,14 @@ function flyAnim(fromEl, toEl) {
   const fr=fromEl.getBoundingClientRect(),tr=toEl.getBoundingClientRect();
   // Block discard-pile renders while this card is in flight
   const isToDiscard = toEl.id==='discard-pile';
-  if(isToDiscard){ S._skipDiscard=true; }
+  if(isToDiscard){
+    S._skipDiscard=true;
+    // Safety fallback: never stay blocked for more than 1.5s
+    clearTimeout(S._skipDiscardFallback);
+    S._skipDiscardFallback = setTimeout(()=>{
+      if(S._skipDiscard){ S._skipDiscard=false; const c=S._pendingDiscardCard||S.gameState?.discardTop; S._pendingDiscardCard=null; if(c)renderDiscardPile(c); }
+    },1500);
+  }
   // Reparent to body at exact current position — the actual element flies, no copy
   fromEl.style.cssText=`position:fixed;left:${fr.left}px;top:${fr.top}px;width:${fr.width}px;height:${fr.height}px;z-index:9999;margin:0;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.7)`;
   document.body.appendChild(fromEl);
@@ -691,8 +706,8 @@ function flyAnim(fromEl, toEl) {
   setTimeout(()=>{
     fromEl.remove();
     if(isToDiscard){
+      clearTimeout(S._skipDiscardFallback);
       S._skipDiscard=false;
-      // Now show the card that arrived
       const c=S._pendingDiscardCard||S.gameState?.discardTop;
       S._pendingDiscardCard=null;
       if(c) renderDiscardPile(c);
@@ -877,16 +892,28 @@ socket.on('game:card-discarded',({card, discarderId})=>{
 
 // ── Attack reveal ─────────────────────────────────────────────────────────
 socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
-  // Play sound exactly when the result text appears (3.2s into the overlay)
+  S._attackRevealActive = true;   // PAUSE all game interactions for everyone
+  renderActions();                 // immediately hide buttons
+
   setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 3200);
   showAttackReveal(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard);
   addLog(success?`✅ ${attackerUsername}: azzeccato! ${cardStr(card)}`:`❌ ${attackerUsername}: sbagliato! +1 carta`,success?'success':'danger');
-  // After reveal, re-render hand (card removed on success, or extra card on fail)
+
+  // At 2.7s: clear selection visual, update hand/score
   setTimeout(()=>{
     if(attackerUserId===S.userId) S._attackMode=false;
-    S._selIdx=-1;  // clear any residual selection border
-    renderMyHand();renderScore();renderSeats();renderActions();
+    S._selIdx=-1;
+    renderMyHand();renderScore();renderSeats();
   },2700);
+
+  // At 4.5s: overlay fading — UNPAUSE, restore buttons
+  setTimeout(()=>{
+    S._attackRevealActive=false;
+    renderActions();renderTurnBanner();
+  },4500);
+
+  // Safety: always unpause after 6s even if something went wrong
+  setTimeout(()=>{ S._attackRevealActive=false; renderActions(); },6000);
 });
 
 // ── Attack reveal: discard card shown first, then attack card ─────────────

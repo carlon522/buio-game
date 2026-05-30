@@ -66,12 +66,21 @@ function advanceTurnInRoom(roomId, result) {
 }
 
 // â”€â”€ Bot engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Is a reveal overlay currently showing? Block actions during this window.
+function revealActive(room) { return room._revealUntil && Date.now() < room._revealUntil; }
+
 function triggerBot(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'playing') return;
   const cur = room.getCurrentPlayer();
   if (!cur || !isBot(cur.userId)) return;
   if (room._botBusy) return;
+  // Don't act during attack reveal — reschedule for after it clears
+  if (revealActive(room)) {
+    const wait = Math.max(500, room._revealUntil - Date.now() + 400);
+    setTimeout(() => triggerBot(roomId), wait);
+    return;
+  }
 
   room._botBusy = true;
   room._botBusySince = Date.now();
@@ -411,6 +420,7 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
+    if (revealActive(room)) return; // block during attack reveal
 
     const result = room.drawFromDeck(me.userId);
     if (result.error) return socket.emit('game:error', { message: result.error });
@@ -487,6 +497,7 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
+    if (revealActive(room)) return; // block during attack reveal
 
     clearTimeout(room._turnTimer);
     const result = room.discardCard(me.userId, handIndex ?? -1);
@@ -561,6 +572,9 @@ io.on('connection', socket => {
     const result = room.attack(me.userId, cardIndex);
     if (result.error) return socket.emit('game:error', { message: result.error });
 
+    // Pause the room for the reveal animation duration (5 s overlay on client)
+    room._revealUntil = Date.now() + 5500;
+
     // Reveal to ALL: show both the discard top (what was being matched) AND the attacker's card
     const discardTop = room.discardPile[room.discardPile.length - 1];
     io.to(room.id).emit('game:attack-reveal', {
@@ -602,6 +616,7 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
+    if (revealActive(room)) return; // block during attack reveal
 
     clearTimeout(room._turnTimer);
     const result = room.knock(me.userId);
