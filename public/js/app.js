@@ -407,6 +407,8 @@ function renderTurnBanner() {
 
   function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; show(bar); }
 
+  const myPlayer=gs?.players.find(p=>p.userId===S.userId);
+  if(myPlayer?.isEliminated){ hide(bar); return; }
   if(S._attackMode){ setBar('attack-time','⚔ Scegli carta!');return; }
   if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Scarta prima!');return; }
   if(isMe){
@@ -461,12 +463,16 @@ function renderMyHand() {
   const me=gs?.players.find(p=>p.userId===S.userId);
   const count=me?.cardCount??4;
 
+  const handEl=$('my-hand');
+  if(me?.isEliminated){
+    handEl.innerHTML='<div class="spectator-msg">👁 Stai guardando</div>';
+    return;
+  }
+
   // Keep handOrder in sync with actual count
   if(!S.handOrder||S.handOrder.length!==count) {
     S.handOrder=Array.from({length:count},(_,i)=>i);
   }
-
-  const handEl=$('my-hand');
   handEl.innerHTML=S.handOrder.map((serverIdx,visualIdx)=>{
     let cls='';
     if(inDiscard||inForcedDiscard) cls+=' clickable';
@@ -543,6 +549,8 @@ function renderActions() {
   const hint=$('action-hint');
   hide($('btn-draw'));hide($('btn-knock'));hide($('btn-attack'));hide($('btn-discard-drawn'));
   hint.textContent='';
+  const myPlayer=gs?.players.find(p=>p.userId===S.userId);
+  if(myPlayer?.isEliminated){ hint.textContent='👁 Sei eliminato — stai guardando'; return; }
   // All actions frozen during attack reveal overlay
   if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
 
@@ -574,6 +582,7 @@ function onHandClick(visualIdx) {
   // ── Card 9 nove9 mode: tap to temporarily reveal a card ──
   if(S._nove9Mode){
     S._nove9Mode=false;
+    SFX.play('9revealclick', 0.7);
     socket.emit('game:use-special-9',{cardIndex:serverIdx});
     // Immediately flip up the tapped card; server will confirm via game:peeked
     S._tempRevealServerIdx=serverIdx;
@@ -1020,6 +1029,7 @@ function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard)
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
 function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
   document.querySelector('.swap-overlay')?.remove();
+  SFX.play('Swapswoosh', 0.75);
 
   const makePile = (n) =>
     Array(Math.min(n, 5)).fill(0)
@@ -1169,6 +1179,8 @@ socket.on('game:knocked',({username})=>{
 // ── Scoring ───────────────────────────────────────────────────────────────
 socket.on('game:scoring',({scores,losers,knockedBy})=>{
   const gs=S.gameState;show($('panel-scoring'));
+  const iLost = losers.includes(S.userId);
+  setTimeout(()=>SFX.play(iLost?'Miniloss':'Miniwin', 0.8), 400);
   $('scoring-round').textContent=gs?.roundNumber||'';
   const ki=$('scoring-knocked-info');
   if(knockedBy){const kn=gs?.players.find(p=>p.userId===knockedBy)?.username||'?';show(ki);ki.textContent=`✊ ${kn} ha bussato — paga doppio se ha più punti!`;}
@@ -1186,7 +1198,11 @@ socket.on('game:scoring',({scores,losers,knockedBy})=>{
 
 socket.on('game:gameover',({scores,winner})=>{
   hide($('panel-scoring'));show($('panel-gameover'));
-  $('gameover-text').textContent=winner?`🏆 ${winner.username} ha vinto!`:'🎲 Partita terminata!';
+  const iWon = winner?.userId === S.userId;
+  SFX.play(iWon ? 'Youwintheleaderboard' : 'Youlosetheleaderboard', 0.9);
+  $('gameover-trophy').textContent = iWon ? '🏆' : '💀';
+  $('gameover-text').textContent = iWon ? 'Hai vinto!' : winner ? `Ha vinto ${winner.username}!` : 'Partita terminata!';
+  $('gameover-sub').textContent = iWon ? 'Memoria di ferro — avversari distrutti.' : 'Meglio la prossima. Forse.';
   $('gameover-scores').innerHTML=[...(scores||[])].sort((a,b)=>a.score-b.score).map(s=>`<div class="score-row${s.userId===winner?.userId?' winner':''}"><span class="score-name">${esc(s.username)}</span><span class="score-val">${s.score}</span></div>`).join('');
   addLog(`🏆 Vincitore: ${winner?.username||'—'}`,'gold');
 });
