@@ -15,6 +15,7 @@ const S = {
   _skipDiscard:false,       // true while a card is flying TO the discard pile
   _pendingDiscardCard:null, // card to show in pile once animation completes
   _attackRevealActive:false,// true during the 5s attack reveal overlay — ALL actions paused
+  _attackAnnouncer:null,    // userId of player currently in announce phase (blocks others' ⚔ button)
   _peekRevealed:null,       // Set of visual indices currently flipped face-up for peek
   _peekDuration:0,          // ms of peek timer
   _nove9Mode:false,         // true when card 9 is active and user must tap a hand card
@@ -242,7 +243,7 @@ socket.on('game:starting',()=>{
   clearTimeout(window._dealBusyFallback);
   window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
-  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;
+  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._attackAnnouncer=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -403,40 +404,43 @@ function renderTurnBanner() {
   const gs=S.gameState;if(!gs)return;
   const isMe=gs.currentPlayerUserId===S.userId,phase=gs.phase;
   const cur=gs.players.find(p=>p.userId===gs.currentPlayerUserId);
+  const tn=$('turn-notification');
   $('info-round').textContent=gs.roundNumber||1;
   gs.lastRound?show($('last-round-pill')):hide($('last-round-pill'));
-  hide($('tb-badge'));
 
   if(S._attackMode){
-    $('turn-banner').className='turn-banner attack-time';$('tb-avatar').textContent='⚔';
-    $('tb-title').textContent='Clicca la carta da usare!';
-    $('tb-sub').textContent='Puoi attaccare più volte se hai più carte uguali';
-    return;
+    tn.className='turn-notification attack-time';
+    $('tn-title').textContent='⚔ Clicca la carta da usare!';
+    $('tn-sub').textContent='Puoi attaccare più volte se hai più carte uguali';
+    show(tn);return;
   }
-  if(phase==='scoring'){$('turn-banner').className='turn-banner neutral';$('tb-avatar').textContent='📊';$('tb-title').textContent='Fine Round — Punteggi';$('tb-sub').textContent='';return;}
+  if(phase==='scoring'){
+    tn.className='turn-notification';
+    $('tn-title').textContent='📊 Fine Round — Punteggi';
+    $('tn-sub').textContent='';
+    show(tn);return;
+  }
   if(phase==='special'){
-    $('turn-banner').className=isMe?'turn-banner my-turn':'turn-banner other-turn';
-    $('tb-avatar').textContent='✨';
-    $('tb-title').textContent=isMe?'Completa l\'azione speciale':`${cur?.username||'...'} sta completando carta speciale`;
-    $('tb-sub').textContent='';return;
+    tn.className=isMe?'turn-notification my-turn':'turn-notification';
+    $('tn-title').textContent=isMe?'✨ Completa l\'azione speciale':`✨ ${cur?.username||'...'} sta completando carta speciale`;
+    $('tn-sub').textContent='';show(tn);return;
   }
   if(phase==='forced-discard'){
-    $('turn-banner').className=isMe?'turn-banner attack-time':'turn-banner other-turn';
-    $('tb-avatar').textContent='🔟';
-    $('tb-title').textContent=isMe?'⚠ Devi scartare PRIMA di pescare!':
-      `${cur?.username||'...'} deve scartare prima di pescare`;
-    $('tb-sub').textContent=isMe?'Effetto del 10: scegli una carta da scartare dalla mano':'';return;
+    tn.className=isMe?'turn-notification attack-time':'turn-notification';
+    $('tn-title').textContent=isMe?'🔟 Devi scartare PRIMA di pescare!':`🔟 ${cur?.username||'...'} deve scartare prima di pescare`;
+    $('tn-sub').textContent=isMe?'Effetto del 10: scegli una carta da scartare dalla mano':'';
+    show(tn);return;
   }
-
   if(isMe){
-    $('turn-banner').className='turn-banner my-turn';$('tb-avatar').textContent=(S.username?.[0]||'?').toUpperCase();
-    if(phase==='draw'){$('tb-title').textContent=gs.lastRound?'⚡ Tuo Turno — Ultimo Giro!':'⭐ Il Tuo Turno!';$('tb-sub').textContent='Clicca il mazzo per pescare — oppure ✊ Busso';}
-    else if(phase==='discard'){const d=S.drawnCard;$('tb-title').textContent='Cosa fare con la carta pescata?';$('tb-sub').textContent=d?.known?`${d.label}${d.symbol} (${d.value}pt) — tienitela o scartala`:'Tienitela o scartala';}
-    if(gs.lastRound){show($('tb-badge'));$('tb-badge').textContent='⚡ ULTIMO GIRO';}
+    tn.className='turn-notification my-turn';
+    if(phase==='draw'){$('tn-title').textContent=gs.lastRound?'⚡ Tuo Turno — Ultimo Giro!':'⭐ Il Tuo Turno!';$('tn-sub').textContent='Clicca il mazzo per pescare — oppure ✊ Busso';}
+    else if(phase==='discard'){const d=S.drawnCard;$('tn-title').textContent='Cosa fare con la carta pescata?';$('tn-sub').textContent=d?.known?`${d.label}${d.symbol} (${d.value}pt) — tienitela o scartala`:'Tienitela o scartala';}
+    show(tn);
   } else {
-    $('turn-banner').className='turn-banner other-turn';$('tb-avatar').textContent=(cur?.username?.[0]||'?').toUpperCase();
-    $('tb-title').textContent=`Turno di ${cur?.username||'…'}`;
-    $('tb-sub').textContent=phase==='draw'?'Sta per pescare…':phase==='discard'?'Sta scegliendo…':'';
+    tn.className='turn-notification';
+    $('tn-title').textContent=`Turno di ${cur?.username||'…'}`;
+    $('tn-sub').textContent=phase==='draw'?'Sta per pescare…':phase==='discard'?'Sta scegliendo…':'';
+    show(tn);
   }
 }
 
@@ -577,7 +581,8 @@ function renderActions() {
     hint.textContent='Scegli l\'azione per la carta speciale';
   }
   // ⚔ available any time during active phases when there's a discard top
-  if(['draw','discard','forced-discard'].includes(phase) && gs?.discardTop && !S._attackMode){
+  // Show ⚔ only if: active phase, discard exists, not already in attack mode, no one else announcing
+  if(['draw','discard','forced-discard'].includes(phase) && gs?.discardTop && !S._attackMode && !S._attackAnnouncer){
     show($('btn-attack'));
   }
   if(S._attackMode){
@@ -953,7 +958,8 @@ socket.on('game:card-discarded',({card, discarderId})=>{
 
 // ── Attack reveal ─────────────────────────────────────────────────────────
 socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
-  S._attackRevealActive = true;   // PAUSE all game interactions for everyone
+  S._attackAnnouncer=null; // announce phase over
+  S._attackRevealActive = true;   // PAUSE all game interactions for reveal
   renderActions();                 // immediately hide buttons
 
   setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 3200);
@@ -1137,13 +1143,13 @@ socket.on('game:swap-reveal', ({initiatorUserId, initiatorUsername, targetUserId
 });
 
 // attack-window-closed / attack-cancelled — safety reset, unblock game
-socket.on('game:attack-window-closed',()=>{ S._attackRevealActive=false;S._attackMode=false; renderMyHand();renderActions();renderTurnBanner(); });
-socket.on('game:attack-cancelled',({username})=>{ S._attackRevealActive=false;S._attackMode=false; const bar=$('attack-announce-bar');if(bar)bar.classList.add('hidden'); renderMyHand();renderActions();renderTurnBanner(); });
+socket.on('game:attack-window-closed',()=>{ S._attackRevealActive=false;S._attackMode=false;S._attackAnnouncer=null; renderMyHand();renderActions();renderTurnBanner(); });
+socket.on('game:attack-cancelled',({username,penalty})=>{ S._attackRevealActive=false;S._attackMode=false;S._attackAnnouncer=null; const bar=$('attack-announce-bar');if(bar)bar.classList.add('hidden'); if(penalty){SFX.play('Fail',0.85);addLog(`⏰ ${username} non ha attaccato in tempo — carta di penalità!`);} renderMyHand();renderActions();renderTurnBanner(); });
 
 // ── Attack announcement — shown to ALL players when ⚔ is pressed ─────────
 socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCard, duration})=>{
   SFX.play('Attacknotify', 0.6);
-  S._attackRevealActive=true; // pause draws/knocks during announce window
+  S._attackAnnouncer=attackerUserId; // track announcer — hides ⚔ for others
   const isAttacker = attackerUserId === S.userId;
 
   // Show the announce bar with the discard card and suspense dots
@@ -1171,7 +1177,8 @@ socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCar
   S._annCdInt=setInterval(()=>{ rem-=.25;$('ann-cd').textContent=Math.max(0,Math.ceil(rem));if(rem<=0)clearInterval(S._annCdInt); },250);
 
   // For the attacker: _attackMode already set by button click — just re-render to be safe
-  if(isAttacker && !S._attackMode){ S._attackMode=true; renderMyHand();renderActions(); }
+  renderActions(); // immediately hide/update buttons for everyone
+  if(isAttacker && !S._attackMode){ S._attackMode=true; renderMyHand(); }
 
   addLog(`⚔ ${attackerUsername} sta attaccando!`,'danger');
 });

@@ -588,9 +588,15 @@ io.on('connection', socket => {
     });
     clearTimeout(room._announceTimer);
     room._announceTimer = setTimeout(() => {
-      room._revealUntil = 0; // unblock
-      io.to(room.id).emit('game:attack-cancelled', { username: me.username });
+      room._revealUntil = 0;
+      const attacker = room.players.find(p => p.userId === me.userId);
+      if (attacker && !attacker.isEliminated && room.deck.length > 0) {
+        attacker.hand.push(room.deck.pop());
+      }
+      io.to(room.id).emit('game:attack-cancelled', { username: me.username, penalty: true });
       io.to(room.id).emit('game:attack-window-closed');
+      io.to(room.id).emit('game:state', room.getPublicState());
+      sendPrivateToAll(room);
     }, ANNOUNCE_MS);
   });
 

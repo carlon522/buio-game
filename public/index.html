@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0e0800">
 <title>BUIO – Gioco di Carte</title>
-<link rel="stylesheet" href="/css/style.css?v=21">
+<link rel="stylesheet" href="/css/style.css?v=22">
 </head>
 <body>
 
@@ -142,21 +142,11 @@
   <!-- ── GAME BOARD ─────────────────────────────────────────────────────── -->
   <div id="game-board" class="game-board">
 
-    <!-- Top HUD bar -->
-    <div id="turn-banner" class="turn-banner neutral">
-      <div class="tb-left">
-        <div class="tb-avatar" id="tb-avatar">?</div>
-        <div class="tb-text">
-          <div class="tb-title" id="tb-title">—</div>
-          <div class="tb-sub"   id="tb-sub">—</div>
-        </div>
-      </div>
-      <div class="tb-right">
-        <div id="tb-badge" class="tb-badge hidden"></div>
-        <div class="round-pill">Round <span id="info-round">1</span></div>
-        <div id="last-round-pill" class="last-round-pill hidden">⚡ ULTIMO GIRO</div>
-        <button id="mute-btn" class="mute-btn" title="Muto/Suono (M)" onclick="SFX.toggle()">🔊</button>
-      </div>
+    <!-- Minimal top strip: round + mute only -->
+    <div class="top-strip">
+      <div class="round-pill">Round <span id="info-round">1</span></div>
+      <div id="last-round-pill" class="last-round-pill hidden">⚡ ULTIMO GIRO</div>
+      <button id="mute-btn" class="mute-btn" title="Muto/Suono (M)" onclick="SFX.toggle()">🔊</button>
     </div>
 
     <!-- Attack bars (between banner and table) -->
@@ -186,6 +176,11 @@
       <div class="poker-table" id="poker-table">
 
         <!-- Opponents are injected here by JS at the correct seat positions -->
+        <!-- Turn notification badge: floats on the table, centered -->
+        <div id="turn-notification" class="turn-notification hidden">
+          <div class="tn-title" id="tn-title"></div>
+          <div class="tn-sub"   id="tn-sub"></div>
+        </div>
         <div id="seats-container" class="seats-container"></div>
 
         <!-- Center of table: deck + discard only (log moved outside flex row) -->
@@ -293,6 +288,6 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="/js/app.js?v=21"></script>
+<script src="/js/app.js?v=22"></script>
 </body>
 </html>

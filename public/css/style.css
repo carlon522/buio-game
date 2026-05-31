@@ -599,6 +599,39 @@ input,select{font-family:inherit}
 .dp-btn.active{background:rgba(46,204,113,.2);border-color:var(--success);color:#2ecc71}
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
+/* ── Top strip (minimal, replaces tall turn-banner) ─────────────────────── */
+.top-strip{
+  display:flex;align-items:center;justify-content:flex-end;gap:.5rem;
+  padding:.3rem .75rem;flex-shrink:0;
+  background:rgba(0,0,0,.35);border-bottom:1px solid rgba(196,133,59,.08);
+  min-height:32px;
+}
+/* turn-banner class kept for compat but no longer displayed as a tall bar */
+.turn-banner{display:none}
+
+/* ── Turn notification — floats on the table below opponents ─────────────── */
+.turn-notification{
+  position:absolute;
+  bottom:52%;left:50%;
+  transform:translateX(-50%);
+  z-index:8;
+  background:rgba(0,0,0,.68);
+  border:1px solid rgba(196,133,59,.35);
+  border-radius:12px;padding:.45rem 1.1rem;
+  text-align:center;pointer-events:none;
+  backdrop-filter:blur(6px);
+  animation:tn-in .35s ease-out;
+  max-width:80%;
+  white-space:nowrap;
+}
+.turn-notification.my-turn{ border-color:var(--gold);background:rgba(196,133,59,.18); }
+.turn-notification.attack-time{ border-color:var(--danger);background:rgba(231,76,60,.18); }
+.tn-title{font-size:.82rem;font-weight:800;color:var(--gold-lt)}
+.turn-notification.my-turn .tn-title{color:var(--gold-lt)}
+.turn-notification.attack-time .tn-title{color:#ff8f85}
+.tn-sub{font-size:.65rem;color:rgba(255,248,240,.45);margin-top:.12rem}
+@keyframes tn-in{from{opacity:0;transform:translateX(-50%) translateY(6px)}to{opacity:1;transform:translateX(-50%)}}
+
 /* ── Mobile + universal fixes ────────────────────────────────────────────── */
 /* No double-tap zoom, no highlight flash, no text selection during play */
 .card-3d,.btn-action,.btn-primary,.btn-ghost{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
