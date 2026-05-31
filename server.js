@@ -221,7 +221,7 @@ function botAct(roomId, botId) {
   }
 
   // Unknown phase â€” don't get stuck
-  console.warn('[bot] unhandled phase:', phase, 'â€” waiting for watchdog');
+  console.warn('[bot] unhandled phase:', phase, ' - waiting for watchdog');
 }
 
 // â”€â”€ Bot watchdog: unsticks frozen bots every 5 s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -381,7 +381,7 @@ io.on('connection', socket => {
     const bot = addBotToRoom(room);
     socket.emit('lobby:joined', { roomId, room: room.getPublicState() });
     if (bot) {
-      io.to(roomId).emit('game:message', { text: `ðŸ¤– ${bot.botName} Ã¨ pronto!` });
+      io.to(roomId).emit('game:message', { text: `🤖 ${bot.botName} è pronto!` });
     }
     io.emit('lobby:list', getLobbyList());
 
@@ -399,7 +399,7 @@ io.on('connection', socket => {
     if (!bot) return socket.emit('lobby:error', { message: 'Stanza piena' });
 
     io.to(room.id).emit('game:state', room.getPublicState());
-    io.to(room.id).emit('game:message', { text: `ðŸ¤– ${bot.botName} aggiunto come bot!` });
+    io.to(room.id).emit('game:message', { text: `🤖 ${bot.botName} aggiunto come bot!` });
     io.emit('lobby:list', getLobbyList());
   });
 

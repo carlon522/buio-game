@@ -231,10 +231,7 @@ socket.on('game:private',priv=>{
 });
 socket.on('game:turn-start',({userId,username})=>{
   renderTurnBanner();
-  if(userId===S.userId){
-    toast('⭐ È il tuo turno!','success');
-    SFX.play('Card',0.3); // subtle reminder it's your turn
-  }
+  if(userId===S.userId) SFX.play('Card',0.3);
   addLog(`Turno di ${username}`,'info');
 });
 socket.on('game:starting',()=>{
