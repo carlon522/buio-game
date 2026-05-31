@@ -185,9 +185,9 @@ function showWaiting(gs) {
   if(isHost){
     show($('btn-start-game'));$('btn-start-game').disabled=!canStart;
     // Show Add-bot only if room has space and no bot yet
-    const hasBots=gs.players.some(p=>p.userId?.startsWith('bot_'));
+    // Allow adding multiple bots as long as there's space
     const hasSpace=gs.players.length<gs.maxPlayers;
-    if(!hasBots&&hasSpace) show($('btn-add-bot'));
+    if(hasSpace) show($('btn-add-bot'));
     else hide($('btn-add-bot'));
     $('waiting-hint').textContent=canStart?'Premi Inizia!':'Serve almeno un altro giocatore…';
   } else {
@@ -1136,12 +1136,14 @@ socket.on('game:swap-reveal', ({initiatorUserId, initiatorUsername, targetUserId
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
-// attack-window-closed — safety reset
-socket.on('game:attack-window-closed',()=>{ S._attackMode=false; renderMyHand();renderActions();renderTurnBanner(); });
+// attack-window-closed / attack-cancelled — safety reset, unblock game
+socket.on('game:attack-window-closed',()=>{ S._attackRevealActive=false;S._attackMode=false; renderMyHand();renderActions();renderTurnBanner(); });
+socket.on('game:attack-cancelled',({username})=>{ S._attackRevealActive=false;S._attackMode=false; const bar=$('attack-announce-bar');if(bar)bar.classList.add('hidden'); renderMyHand();renderActions();renderTurnBanner(); });
 
 // ── Attack announcement — shown to ALL players when ⚔ is pressed ─────────
 socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCard, duration})=>{
   SFX.play('Attacknotify', 0.6);
+  S._attackRevealActive=true; // pause draws/knocks during announce window
   const isAttacker = attackerUserId === S.userId;
 
   // Show the announce bar with the discard card and suspense dots

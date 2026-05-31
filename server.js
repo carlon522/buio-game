@@ -123,6 +123,20 @@ function botAct(roomId, botId) {
       if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'discard') {
         triggerBot(roomId); return;
       }
+      // Bot knocks with 20% chance in late game (deck < 20 cards left)
+      if (room.deck.length < 20 && Math.random() < 0.20) {
+        const knockRes = room.knock(botId);
+        if (!knockRes.error) {
+          io.to(roomId).emit('game:knocked', { username: room.players.find(p=>p.userId===botId)?.username });
+          if (knockRes.type === 'scoring' || knockRes.type === 'gameover') {
+            advanceTurnInRoom(roomId, knockRes);
+          } else {
+            io.to(roomId).emit('game:state', room.getPublicState());
+            advanceTurnInRoom(roomId, knockRes);
+          }
+          return;
+        }
+      }
       const player = room.players.find(p => p.userId === botId);
       const hLen = player?.hand.length || 0;
       const idx = hLen > 0 && Math.random() < 0.55 ? Math.floor(Math.random() * hLen) : -1;
@@ -192,11 +206,10 @@ function botAct(roomId, botId) {
     const idx = Math.floor(Math.random() * Math.max(1, player?.hand.length || 1));
     const res = room.forcedDiscardFromHand(botId, idx);
     if (res.error) { console.warn('[bot] forced-discard error:', res.error); triggerBot(roomId); return; }
-    io.to(roomId).emit('game:state', room.getPublicState());
     io.to(roomId).emit('game:card-discarded', { card: res.discardedCard, discarderId: botId });
+    io.to(roomId).emit('game:state', room.getPublicState());
     sendPrivateToAll(room);
-    // Phase is now 'draw' â€” re-trigger self
-    setTimeout(() => { room._botBusy = false; triggerBot(roomId); }, randMs(500, 900));
+    advanceTurnInRoom(roomId, res);
     return;
   }
 
@@ -549,37 +562,53 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
-
     clearTimeout(room._turnTimer);
     const result = room.forcedDiscardFromHand(me.userId, handIndex ?? 0);
     if (result.error) return socket.emit('game:error', { message: result.error });
-
-    socket.emit('game:private', room.getPrivateState(me.userId));
-    io.to(room.id).emit('game:state', room.getPublicState());
     io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId });
-    // Now phase is 'draw' â€” player can draw
-    startTurnTimer(room);
+    io.to(room.id).emit('game:state', room.getPublicState());
+    sendPrivateToAll(room);
+    advanceTurnInRoom(room.id, result);
   });
 
-  // game:announce-attack kept for backward compat but no-op â€” client goes direct now
-  socket.on('game:announce-attack', () => {});
+  // Attack announcement: pause game + broadcast discard card to ALL players
+  socket.on('game:announce-attack', () => {
+    if (!me) return;
+    const room = getMyRoom();
+    if (!room || ['scoring','gameover','peek'].includes(room.phase)) return;
+    if (revealActive(room)) return;
+    if (!room.discardPile.length) return;
+    const discardCard = room.discardPile[room.discardPile.length - 1];
+    const ANNOUNCE_MS = 30000;
+    // Pause all game actions during announcement window
+    room._revealUntil = Date.now() + ANNOUNCE_MS;
+    io.to(room.id).emit('game:attack-announced', {
+      attackerUserId: me.userId, attackerUsername: me.username,
+      discardCard, duration: ANNOUNCE_MS,
+    });
+    clearTimeout(room._announceTimer);
+    room._announceTimer = setTimeout(() => {
+      room._revealUntil = 0; // unblock
+      io.to(room.id).emit('game:attack-cancelled', { username: me.username });
+      io.to(room.id).emit('game:attack-window-closed');
+    }, ANNOUNCE_MS);
+  });
 
   socket.on('game:attack', ({ cardIndex } = {}) => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
 
+    // Capture discard top BEFORE the attack modifies the pile
+    const discardTop = room.discardPile[room.discardPile.length - 1];
+
     const result = room.attack(me.userId, cardIndex);
     if (result.error) return socket.emit('game:error', { message: result.error });
 
-    // Cancel the 30s announce timer — attack was made, no need to auto-cancel
-    clearTimeout(room._announceTimer);
-
-    // Pause the room for the reveal animation duration (5 s overlay on client)
+    clearTimeout(room._announceTimer); // cancel 30s auto-cancel timer
     room._revealUntil = Date.now() + 5500;
 
-    // Reveal to ALL: show both the discard top (what was being matched) AND the attacker's card
-    const discardTop = room.discardPile[room.discardPile.length - 1];
+    // Reveal to ALL: show original discard card (pre-attack) and attacker's card
     io.to(room.id).emit('game:attack-reveal', {
       attackerUserId: me.userId,
       attackerUsername: me.username,
@@ -592,6 +621,7 @@ io.on('connection', socket => {
     // Delay ALL state updates until after the reveal overlay closes (overlay fades at 5s)
     // This way the card count/hand changes only appear AFTER the announcement sequence
     setTimeout(() => {
+      room._revealUntil = 0; // unblock game actions after reveal
       io.to(room.id).emit('game:state', room.getPublicState());
       if (result.success) {
         // Success: show updated hand after overlay gone

@@ -189,7 +189,8 @@ class GameRoom {
     return this._advanceTurn(null);
   }
 
-  // For 10-card effect: discard a hand card before drawing
+  // For 10-card effect: ATOMIC — discard a hand card, auto-draw replacement, advance turn.
+  // "Scarta prima di pescare" = discard → pick up → done. No second discard decision.
   forcedDiscardFromHand(userId, handIndex) {
     if (this.phase !== 'forced-discard') return { error: 'Not forced-discard phase' };
     if (this.getCurrentPlayer()?.userId !== userId) return { error: 'Not your turn' };
@@ -198,6 +199,7 @@ class GameRoom {
     if (!player) return { error: 'Player not found' };
     if (handIndex < 0 || handIndex >= player.hand.length) return { error: 'Invalid card' };
 
+    // 1. Discard the chosen hand card
     const discardedCard = player.hand.splice(handIndex, 1)[0];
     const newSeen = new Set();
     for (const idx of player.seenCards) {
@@ -207,11 +209,24 @@ class GameRoom {
     player.seenCards = newSeen;
     this.discardPile.push(discardedCard);
     this.lastDiscard = discardedCard;
-    this.phase = 'draw'; // now they can draw normally
-    return { discardedCard, success: true };
+
+    // 2. Automatically draw a replacement card (no decision for the player)
+    let drawnCard = null;
+    if (this.deck.length === 0 && this.discardPile.length > 1) {
+      const top = this.discardPile.pop();
+      this.deck = shuffle(this.discardPile);
+      this.discardPile = top ? [top] : [];
+    }
+    if (this.deck.length > 0) {
+      drawnCard = this.deck.pop();
+      player.hand.push(drawnCard); // added face-down at the end — player doesn't see it
+    }
+
+    // 3. Advance turn immediately — no second draw/discard phase
+    return this._advanceTurn(discardedCard, drawnCard);
   }
 
-  _advanceTurn(discardedCard) {
+  _advanceTurn(discardedCard, drawnCard = null) {
     if (this.lastRound) {
       if (this.lastRoundQueue.length === 0) {
         const sr = this._scoreRound();
