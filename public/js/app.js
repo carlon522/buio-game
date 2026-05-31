@@ -625,8 +625,19 @@ function onHandClick(visualIdx) {
     S.handOrder = newOrder;
     if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
 
-    // Capture drawn-slot rect NOW before hiding — used for the fly-in animation later
-    const _drawnRect = $('drawn-slot')?.getBoundingClientRect();
+    // Create drawn-card ghost immediately so it's never invisible during the animation
+    const _dsRect=$('drawn-slot')?.getBoundingClientRect();
+    const _st=getComputedStyle(document.documentElement);
+    const _cw=parseInt(_st.getPropertyValue('--cw'))||66;
+    const _ch=parseInt(_st.getPropertyValue('--ch'))||100;
+    let _drawnGhost=null;
+    if(_dsRect){
+      _drawnGhost=document.createElement('div');
+      _drawnGhost.className='card-3d card-back';
+      _drawnGhost.id='drawn-ghost';
+      _drawnGhost.style.cssText=`position:fixed;left:${_dsRect.left+_dsRect.width/2-_cw/2}px;top:${_dsRect.top+_dsRect.height/2-_ch/2}px;width:${_cw}px;height:${_ch}px;z-index:9998;margin:0;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55)`;
+      document.body.appendChild(_drawnGhost);
+    }
 
     // Show gap where the card was; keep drawn-card slot hidden until gap closes
     S._animSlot = lastVI;
@@ -637,30 +648,22 @@ function onHandClick(visualIdx) {
     socket.emit('game:discard',{handIndex:serverIdx});
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
 
-    // After 1.8s: collapse gap → cards shift → drawn card flies from deck area into hand
+    // After 1.8s: collapse gap → cards shift → ghost flies from where drawn-slot was into hand
     setTimeout(()=>{
       S._gapClosing=true;
       const gap=document.getElementById('hand-gap');
       const afterGap=()=>{
         S._gapSlotVI=null; S._gapClosing=false;
-        // Fly drawn card (face-down) from its old drawn-slot position into the last hand slot
-        const st=getComputedStyle(document.documentElement);
-        const cw=parseInt(st.getPropertyValue('--cw'))||66;
-        const ch=parseInt(st.getPropertyValue('--ch'))||100;
         const lastEl=$('my-hand').querySelectorAll('.card-3d')[lastVI];
-        if(_drawnRect && lastEl){
+        const ghost=document.getElementById('drawn-ghost')||_drawnGhost;
+        if(ghost && lastEl){
           const tr=lastEl.getBoundingClientRect();
-          const ghost=document.createElement('div');
-          ghost.className='card-3d card-back';
-          ghost.style.cssText=`position:fixed;left:${_drawnRect.left+_drawnRect.width/2-cw/2}px;top:${_drawnRect.top+_drawnRect.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9999;margin:0;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.6)`;
-          document.body.appendChild(ghost);
-          requestAnimationFrame(()=>requestAnimationFrame(()=>{
-            ghost.style.transition='left .52s cubic-bezier(.25,.46,.45,.94),top .52s cubic-bezier(.25,.46,.45,.94),transform .52s';
-            ghost.style.left=(tr.left+tr.width/2-cw/2)+'px';
-            ghost.style.top=(tr.top+tr.height/2-ch/2)+'px';
-          }));
-          setTimeout(()=>{ ghost.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.25); },560);
+          ghost.style.transition='left .5s cubic-bezier(.25,.46,.45,.94),top .5s cubic-bezier(.25,.46,.45,.94)';
+          ghost.style.left=(tr.left+tr.width/2-_cw/2)+'px';
+          ghost.style.top=(tr.top+tr.height/2-_ch/2)+'px';
+          setTimeout(()=>{ ghost.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.25); },540);
         } else {
+          if(ghost) ghost.remove();
           S._animSlot=null; renderMyHand();
         }
       };
@@ -812,11 +815,10 @@ function flyAnim(fromEl, toEl) {
   fromEl.style.cssText=`position:fixed;left:${fr.left}px;top:${fr.top}px;width:${fr.width}px;height:${fr.height}px;z-index:9999;margin:0;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.7)`;
   document.body.appendChild(fromEl);
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    fromEl.style.transition='all .6s cubic-bezier(.25,.46,.45,.94)';
+    fromEl.style.transition='left .55s cubic-bezier(.25,.46,.45,.94), top .55s cubic-bezier(.25,.46,.45,.94), transform .55s';
     fromEl.style.left=`${tr.left+tr.width/2-fr.width/2}px`;
     fromEl.style.top =`${tr.top +tr.height/2-fr.height/2}px`;
-    fromEl.style.transform='scale(.7) rotate(5deg)';
-    fromEl.style.opacity='0';
+    fromEl.style.transform='scale(.88)'; // slight shrink as it lands, fully visible the whole way
   }));
   setTimeout(()=>{
     fromEl.remove();
@@ -830,25 +832,27 @@ function flyAnim(fromEl, toEl) {
   },680);
   }catch(e){ S._skipDiscard=false; try{fromEl.remove();}catch(_){} }
 }
-// Lightweight deck-draw animation: a slim card arc from deck to drawn-slot
-function animDeckDraw() {
-  const dk=$('deck-pile'); if(!dk)return;
+// Deck draw animation: full-sized card flies from deck to drawn-slot, then disappears
+// as the actual drawn card is revealed. onArrive fires when ghost reaches destination.
+function animDeckDraw(onArrive) {
+  const dk=$('deck-pile'); if(!dk){onArrive?.();return;}
   const fr=dk.getBoundingClientRect();
   const slot=$('drawn-slot');
-  const tr=slot?.getBoundingClientRect()||{left:fr.left,top:fr.bottom+8,width:fr.width,height:fr.height};
-  // Use 65% size to be less obtrusive — it's just a visual cue, not the main actor
-  const w=Math.round(fr.width*.65), h=Math.round(fr.height*.65);
+  const tr=slot?.getBoundingClientRect();
+  if(!tr||tr.width<4){onArrive?.();return;} // slot not rendered yet, skip
+  const st=getComputedStyle(document.documentElement);
+  const cw=parseInt(st.getPropertyValue('--cw'))||66;
+  const ch=parseInt(st.getPropertyValue('--ch'))||100;
   const f=document.createElement('div');
   f.className='card-3d card-back';
-  f.style.cssText=`position:fixed;left:${fr.left+fr.width/2-w/2}px;top:${fr.top+fr.height/2-h/2}px;width:${w}px;height:${h}px;z-index:9990;pointer-events:none;opacity:.75`;
+  f.style.cssText=`position:fixed;left:${fr.left+fr.width/2-cw/2}px;top:${fr.top+fr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9995;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55)`;
   document.body.appendChild(f);
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    f.style.transition='all .38s cubic-bezier(.25,.46,.45,.94)';
-    f.style.left=`${tr.left}px`; f.style.top=`${tr.top}px`;
-    f.style.width=`${tr.width||w}px`; f.style.height=`${tr.height||h}px`;
-    f.style.opacity='1';
+    f.style.transition='left .45s cubic-bezier(.25,.46,.45,.94),top .45s cubic-bezier(.25,.46,.45,.94)';
+    f.style.left=`${tr.left+tr.width/2-cw/2}px`;
+    f.style.top=`${tr.top+tr.height/2-ch/2}px`;
   }));
-  setTimeout(()=>{ f.style.transition='opacity .18s'; f.style.opacity='0'; setTimeout(()=>f.remove(),200); },400);
+  setTimeout(()=>{ f.remove(); onArrive?.(); },500);
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
@@ -886,7 +890,12 @@ socket.on('game:drawn-card',({card,penalized})=>{
   }
   SFX.play('Card', 0.55);
   renderMyHand();renderActions();renderTurnBanner();
-  requestAnimationFrame(()=>animDeckDraw());
+  // Hide drawn card content, then reveal it once the deck-fly ghost arrives
+  const _dcd=$('drawn-card-display');
+  if(_dcd) _dcd.style.opacity='0';
+  requestAnimationFrame(()=>animDeckDraw(()=>{
+    if(_dcd){ _dcd.style.transition='opacity .18s'; _dcd.style.opacity='1'; }
+  }));
 });
 
 // ── Special cards ─────────────────────────────────────────────────────────
@@ -1332,11 +1341,10 @@ function ghostFly(fromRect, toRect, durationMs=600, mini=false, onDone) {
   ].join(';');
   document.body.appendChild(g);
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    g.style.transition=`all ${durationMs}ms cubic-bezier(.25,.46,.45,.94)`;
+    // Move to destination — no fade/scale so card stays fully visible the whole flight
+    g.style.transition=`left ${durationMs}ms cubic-bezier(.25,.46,.45,.94), top ${durationMs}ms cubic-bezier(.25,.46,.45,.94)`;
     g.style.left=`${toRect.left+toRect.width/2-cw/2}px`;
     g.style.top =`${toRect.top+toRect.height/2-ch/2}px`;
-    g.style.transform='scale(.6) rotate(4deg)';
-    g.style.opacity='0';
   }));
   setTimeout(()=>{ g.remove(); onDone?.(); }, durationMs+80);
 }

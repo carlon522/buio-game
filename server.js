@@ -213,8 +213,48 @@ function botAct(roomId, botId) {
     if (res.error) { console.warn('[bot] forced-discard error:', res.error); triggerBot(roomId); return; }
     io.to(roomId).emit('game:card-discarded', { card: res.discardedCard, discarderId: botId });
     io.to(roomId).emit('game:state', room.getPublicState());
-    sendPrivateToAll(room);
-    advanceTurnInRoom(roomId, res);
+
+    if (res.specialType === 9) {
+      setTimeout(() => {
+        const bp = room.players.find(p => p.userId === botId);
+        let pi = bp?.hand.findIndex((_, i) => !bp.seenCards.has(i));
+        if (pi < 0) pi = 0;
+        room.useSpecial9(botId, pi);
+        io.to(roomId).emit('game:state', room.getPublicState());
+        const adv = room.completeSpecialAndAdvance();
+        io.to(roomId).emit('game:state', room.getPublicState());
+        sendPrivateToAll(room);
+        advanceTurnInRoom(roomId, adv);
+      }, randMs(500, 1000));
+    } else if (res.specialType === 8) {
+      setTimeout(() => {
+        const bp = room.players.find(p => p.userId === botId);
+        const opponents = room.getActivePlayers().filter(p => p.userId !== botId);
+        if (bp && bp.hand.length > 0 && opponents.length > 0) {
+          let maxVal = -1, myCardIdx = 0;
+          bp.hand.forEach((c, i) => { if (c.value > maxVal) { maxVal = c.value; myCardIdx = i; } });
+          const opp = opponents[Math.floor(Math.random() * opponents.length)];
+          const swapRes = room.useSpecial8Full(botId, myCardIdx, opp.userId, Math.floor(Math.random() * opp.hand.length));
+          if (!swapRes.error) {
+            io.to(roomId).emit('game:swap-reveal', {
+              initiatorUserId: botId, initiatorUsername: bp.username,
+              targetUserId: opp.userId, targetUsername: opp.username,
+            });
+            sendPrivateToAll(room);
+            io.to(roomId).emit('game:state', room.getPublicState());
+          }
+        }
+        setTimeout(() => {
+          const adv = room.completeSpecialAndAdvance();
+          io.to(roomId).emit('game:state', room.getPublicState());
+          sendPrivateToAll(room);
+          advanceTurnInRoom(roomId, adv);
+        }, 3300);
+      }, randMs(600, 1200));
+    } else {
+      sendPrivateToAll(room);
+      advanceTurnInRoom(roomId, res);
+    }
     return;
   }
 
@@ -575,10 +615,28 @@ io.on('connection', socket => {
     clearTimeout(room._turnTimer);
     const result = room.forcedDiscardFromHand(me.userId, handIndex ?? 0);
     if (result.error) return socket.emit('game:error', { message: result.error });
+
     io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId });
     io.to(room.id).emit('game:state', room.getPublicState());
-    sendPrivateToAll(room);
-    advanceTurnInRoom(room.id, result);
+
+    if (result.specialType === 8 || result.specialType === 9) {
+      // Special discarded during forced-discard — trigger special, draw replacement after
+      socket.emit('game:special-prompt', { type: String(result.specialType), card: result.discardedCard });
+      socket.broadcast.to(room.id).emit('game:special-triggered', {
+        username: me.username, type: String(result.specialType), card: result.discardedCard,
+      });
+      room._turnTimer = setTimeout(() => {
+        if (room.phase === 'special') {
+          const adv = room.completeSpecialAndAdvance();
+          io.to(room.id).emit('game:state', room.getPublicState());
+          sendPrivateToAll(room);
+          advanceTurnInRoom(room.id, adv);
+        }
+      }, 30000);
+    } else {
+      sendPrivateToAll(room);
+      advanceTurnInRoom(room.id, result);
+    }
   });
 
   // Attack announcement: pause game + broadcast discard card to ALL players

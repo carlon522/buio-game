@@ -81,7 +81,8 @@ class GameRoom {
     this.lastRoundQueue = [];
     this.attackWindowAttackers = new Set();
     this.attackAnnouncer = null;
-    this.forcedDiscardNext = false;  // 10-card effect: next player discards before drawing
+    this.forcedDiscardNext = false;
+    this._pendingForcedDiscardDraw = false; // true when special fires during forced-discard
     this.readyPlayers = new Set();
 
     for (const p of this.getActivePlayers()) {
@@ -187,6 +188,19 @@ class GameRoom {
   // Called after special card (8 or 9) action is completed
   completeSpecialAndAdvance() {
     if (this.phase !== 'special') return { error: 'Not special phase' };
+    // If special fired during forced-discard, draw the replacement card now
+    if (this._pendingForcedDiscardDraw) {
+      this._pendingForcedDiscardDraw = false;
+      const player = this.getCurrentPlayer();
+      if (player) {
+        if (this.deck.length === 0 && this.discardPile.length > 1) {
+          const top = this.discardPile.pop();
+          this.deck = shuffle(this.discardPile);
+          this.discardPile = top ? [top] : [];
+        }
+        if (this.deck.length > 0) player.hand.push(this.deck.pop());
+      }
+    }
     return this._advanceTurn(null);
   }
 
@@ -211,7 +225,17 @@ class GameRoom {
     this.discardPile.push(discardedCard);
     this.lastDiscard = discardedCard;
 
-    // 2. Automatically draw a replacement card (no decision for the player)
+    // 2a. Special card (8 or 9): trigger special BEFORE drawing replacement
+    if (discardedCard.value === 8 || discardedCard.value === 9) {
+      this._pendingForcedDiscardDraw = true;
+      this.phase = 'special';
+      return { discardedCard, success: true, specialType: discardedCard.value };
+    }
+
+    // 2b. 10 card discarded during forced-discard: chain the effect
+    if (discardedCard.value === 10) this.forcedDiscardNext = true;
+
+    // 3. Automatically draw a replacement card, then advance turn
     let drawnCard = null;
     if (this.deck.length === 0 && this.discardPile.length > 1) {
       const top = this.discardPile.pop();
@@ -220,10 +244,8 @@ class GameRoom {
     }
     if (this.deck.length > 0) {
       drawnCard = this.deck.pop();
-      player.hand.push(drawnCard); // added face-down at the end — player doesn't see it
+      player.hand.push(drawnCard);
     }
-
-    // 3. Advance turn immediately — no second draw/discard phase
     return this._advanceTurn(discardedCard, drawnCard);
   }
 
