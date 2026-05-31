@@ -7,7 +7,7 @@ class GameRoom {
   constructor(id, hostUserId, hostUsername, name, maxPlayers = 4) {
     this.id = id;
     this.name = name;
-    this.hostUserId = hostUserId;
+    this.hostUserId = String(hostUserId);
     this.maxPlayers = Math.min(Math.max(maxPlayers, 2), 8);
     this.status = 'waiting';
     this.phase = 'waiting';
@@ -27,7 +27,8 @@ class GameRoom {
   }
 
   addPlayer(userId, username, socketId) {
-    const existing = this.players.find(p => p.userId === userId);
+    const uid = String(userId);
+    const existing = this.players.find(p => p.userId === uid);
     if (existing) {
       existing.socketId = socketId;
       existing.connected = true;
@@ -35,7 +36,7 @@ class GameRoom {
     }
     if (this.players.length >= this.maxPlayers) return false;
     this.players.push({
-      userId, username, socketId,
+      userId: uid, username, socketId,
       hand: [],
       lives: INITIAL_LIVES,
       seenCards: new Set(),
@@ -233,6 +234,10 @@ class GameRoom {
         return discardedCard ? { discardedCard, success: true, ...sr } : { success: true, ...sr };
       }
       const nextId = this.lastRoundQueue.shift();
+      if (!nextId) {
+        const sr = this._scoreRound();
+        return discardedCard ? { discardedCard, success: true, ...sr } : { success: true, ...sr };
+      }
       const nextIdx = this.players.findIndex(p => p.userId === nextId);
       if (nextIdx !== -1 && !this.players[nextIdx].isEliminated) {
         this.currentPlayerIndex = nextIdx;
@@ -240,7 +245,10 @@ class GameRoom {
         const sr = this._scoreRound();
         return discardedCard ? { discardedCard, success: true, ...sr } : { success: true, ...sr };
       } else {
-        this.currentPlayerIndex = this.players.findIndex(p => p.userId === this.lastRoundQueue.shift());
+        const fallbackId = this.lastRoundQueue.shift();
+        const fallbackIdx = this.players.findIndex(p => p.userId === fallbackId);
+        if (fallbackIdx !== -1) this.currentPlayerIndex = fallbackIdx;
+        else { const sr = this._scoreRound(); return discardedCard ? { discardedCard, success: true, ...sr } : { success: true, ...sr }; }
       }
     } else {
       this.currentPlayerIndex = this._nextActiveIndex(this.currentPlayerIndex);
@@ -324,7 +332,7 @@ class GameRoom {
 
   attack(userId, cardIndex) {
     // Attacks allowed any time during active gameplay
-    if (!['draw', 'discard'].includes(this.phase)) return { error: 'Cannot attack now' };
+    if (!['draw', 'discard', 'forced-discard'].includes(this.phase)) return { error: 'Cannot attack now' };
     if (!this.discardPile.length) return { error: 'Nothing to attack' };
 
     const player = this.players.find(p => p.userId === userId);

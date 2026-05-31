@@ -118,7 +118,7 @@ function getOppPosition(idx, total) {
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 function tryRestore(){const t=localStorage.getItem('buio_token'),u=localStorage.getItem('buio_username'),id=localStorage.getItem('buio_userId');if(t&&u&&id){S.token=t;S.username=u;S.userId=id;return true;}return false;}
-function saveSession(tk,un,id){S.token=tk;S.username=un;S.userId=id;localStorage.setItem('buio_token',tk);localStorage.setItem('buio_username',un);localStorage.setItem('buio_userId',id);}
+function saveSession(tk,un,id){S.token=tk;S.username=un;S.userId=String(id);localStorage.setItem('buio_token',tk);localStorage.setItem('buio_username',un);localStorage.setItem('buio_userId',String(id));}
 function clearSession(){S.token=S.username=S.userId=null;['buio_token','buio_username','buio_userId'].forEach(k=>localStorage.removeItem(k));}
 async function apiPost(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json();}
 
@@ -209,6 +209,11 @@ socket.on('game:state',state=>{
   // If state arrives while attack reveal is active, unblock game immediately
   if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; }
   S.gameState=state;
+  // Sync hand order if card count changed (prevents index desync after network gaps)
+  const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
+  if(_me && (!S.handOrder || S.handOrder.length!==_me.cardCount)){
+    S.handOrder=Array.from({length:_me.cardCount},(_,i)=>i);
+  }
   if(state.status==='waiting'){showWaiting(state);return;}
   hide($('panel-waiting'));
 
@@ -551,7 +556,7 @@ function renderActions() {
   const hint=$('action-hint');
   hide($('btn-draw'));hide($('btn-knock'));hide($('btn-attack'));hide($('btn-discard-drawn'));
   hint.textContent='';
-  const myPlayer=gs?.players.find(p=>p.userId===S.userId);
+  const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
   if(myPlayer?.isEliminated){ hint.textContent='👁 Sei eliminato — stai guardando'; return; }
   // All actions frozen during attack reveal overlay
   if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
@@ -731,6 +736,7 @@ function discardDrawn() {
 // ── flyAnim: reparent the actual element to body, animate it to destination ──
 function flyAnim(fromEl, toEl) {
   if(!fromEl||!toEl)return;
+  try{
   const fr=fromEl.getBoundingClientRect(),tr=toEl.getBoundingClientRect();
   // Block discard-pile renders while this card is in flight
   const isToDiscard = toEl.id==='discard-pile';
@@ -762,6 +768,7 @@ function flyAnim(fromEl, toEl) {
       if(c) renderDiscardPile(c);
     }
   },680);
+  }catch(e){ S._skipDiscard=false; try{fromEl.remove();}catch(_){} }
 }
 // Lightweight deck-draw animation: a slim card arc from deck to drawn-slot
 function animDeckDraw() {
@@ -945,6 +952,7 @@ socket.on('game:card-discarded',({card, discarderId})=>{
 socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
   S._attackAnnouncer=null;
   S._attackRevealActive=true;
+  S.drawnCard=null; // clear stale drawn card so discard branch doesn't misfire on resume
   clearInterval(S._annCdInt);
   hide($('attack-announce-bar'));
   renderActions();
@@ -1175,7 +1183,7 @@ socket.on('game:knocked',({username})=>{
 // ── Scoring ───────────────────────────────────────────────────────────────
 socket.on('game:scoring',({scores,losers,knockedBy})=>{
   const gs=S.gameState;show($('panel-scoring'));
-  const iLost = losers.includes(S.userId);
+  const iLost = losers.some(id=>String(id)===String(S.userId));
   setTimeout(()=>SFX.play(iLost?'Miniloss':'Miniwin', 0.8), 400);
   $('scoring-round').textContent=gs?.roundNumber||'';
   const ki=$('scoring-knocked-info');
@@ -1194,7 +1202,7 @@ socket.on('game:scoring',({scores,losers,knockedBy})=>{
 
 socket.on('game:gameover',({scores,winner})=>{
   hide($('panel-scoring'));show($('panel-gameover'));
-  const iWon = winner?.userId === S.userId;
+  const iWon = winner && String(winner.userId)===String(S.userId);
   SFX.play(iWon ? 'Youwintheleaderboard' : 'Youlosetheleaderboard', 0.9);
   $('gameover-trophy').textContent = iWon ? '🏆' : '💀';
   $('gameover-text').textContent = iWon ? 'Hai vinto!' : winner ? `Ha vinto ${winner.username}!` : 'Partita terminata!';

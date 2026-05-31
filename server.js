@@ -52,6 +52,11 @@ function startRoomGame(roomId) {
 function advanceTurnInRoom(roomId, result) {
   const room = rooms.get(roomId);
   if (!room) return;
+  // Clear any attack announce state when a turn advances
+  room._botBusy = false;
+  room._revealUntil = 0;
+  clearTimeout(room._announceTimer);
+  room._specialInProgress = false;
   // Guard: never advance on error results
   if (result?.error) { console.warn('[advanceTurn] called with error result:', result.error); return; }
   if (result?.type === 'scoring' || result?.type === 'gameover') {
@@ -111,7 +116,7 @@ function botAct(roomId, botId) {
   if (phase === 'draw') {
     // Human-like pause before reaching for the deck (think time already passed in triggerBot)
     setTimeout(() => {
-      if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'draw') {
+      if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'draw' || revealActive(room)) {
         triggerBot(roomId); return;
       }
       const dr = room.drawFromDeck(botId);
@@ -315,7 +320,7 @@ io.on('connection', socket => {
   socket.on('authenticate', token => {
     try {
       const payload = jwt.verify(token, JWT_SECRET);
-      me = { userId: payload.userId, username: payload.username };
+      me = { userId: String(payload.userId), username: payload.username };
       socketUser.set(socket.id, me);
       socket.emit('authenticated', me);
       socket.emit('lobby:list', getLobbyList());
@@ -449,16 +454,18 @@ io.on('connection', socket => {
   socket.on('game:use-special-9', ({ cardIndex } = {}) => {
     if (!me) return;
     const room = getMyRoom();
-    if (!room) return;
+    if (!room || room.phase !== 'special' || room._specialInProgress) return;
+    room._specialInProgress = true;
 
     const result = room.useSpecial9(me.userId, cardIndex);
-    if (result.error) return socket.emit('game:error', { message: result.error });
+    if (result.error) { room._specialInProgress = false; return socket.emit('game:error', { message: result.error }); }
 
     socket.emit('game:peeked', { cardIndex: result.cardIndex, card: result.card });
     socket.emit('game:private', room.getPrivateState(me.userId));
 
     // Complete special and advance turn
     const adv = room.completeSpecialAndAdvance();
+    room._specialInProgress = false;
     socket.emit('game:private', room.getPrivateState(me.userId));
     io.to(room.id).emit('game:state', room.getPublicState());
     advanceTurnInRoom(room.id, adv);
@@ -468,10 +475,11 @@ io.on('connection', socket => {
   socket.on('game:use-special-8', ({ myCardIndex, targetUserId, targetCardIndex } = {}) => {
     if (!me) return;
     const room = getMyRoom();
-    if (!room) return;
+    if (!room || room.phase !== 'special' || room._specialInProgress) return;
+    room._specialInProgress = true;
 
     const result = room.useSpecial8Full(me.userId, myCardIndex ?? 0, targetUserId, targetCardIndex);
-    if (result.error) return socket.emit('game:error', { message: result.error });
+    if (result.error) { room._specialInProgress = false; return socket.emit('game:error', { message: result.error }); }
 
     // Broadcast swap animation to ALL players â€” they all see which cards were swapped
     io.to(room.id).emit('game:swap-reveal', {
@@ -489,6 +497,7 @@ io.on('connection', socket => {
     // Advance turn after swap animation plays (3 s)
     setTimeout(() => {
       const adv = room.completeSpecialAndAdvance();
+      room._specialInProgress = false;
       io.to(room.id).emit('game:state', room.getPublicState());
       advanceTurnInRoom(room.id, adv);
     }, 3200);
@@ -562,6 +571,7 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
+    if (revealActive(room)) return;
     clearTimeout(room._turnTimer);
     const result = room.forcedDiscardFromHand(me.userId, handIndex ?? 0);
     if (result.error) return socket.emit('game:error', { message: result.error });
@@ -604,6 +614,8 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
+    if (room._actionInProgress) return;
+    room._actionInProgress = true;
 
     // Capture discard top BEFORE the attack modifies the pile
     const discardTop = room.discardPile[room.discardPile.length - 1];
@@ -628,6 +640,7 @@ io.on('connection', socket => {
     // The game:state arrival clears _attackRevealActive on the client, unblocking the game.
     setTimeout(() => {
       room._revealUntil = 0;
+      room._actionInProgress = false;
       io.to(room.id).emit('game:state', room.getPublicState());
       socket.emit('game:private', room.getPrivateState(me.userId));
     }, 3500);
@@ -647,7 +660,8 @@ io.on('connection', socket => {
     if (!me) return;
     const room = getMyRoom();
     if (!room) return;
-    if (revealActive(room)) return; // block during attack reveal
+    if (revealActive(room)) return;
+    if (room._actionInProgress) return;
 
     clearTimeout(room._turnTimer);
     const result = room.knock(me.userId);
@@ -694,6 +708,14 @@ io.on('connection', socket => {
     if (!roomId || !me) return;
     const room = rooms.get(roomId);
     if (room) {
+      // Cancel attack announce lock if this player had one active
+      if (room._revealUntil && Date.now() < room._revealUntil) {
+        room._revealUntil = 0;
+        clearTimeout(room._announceTimer);
+        room._specialInProgress = false;
+        io.to(roomId).emit('game:attack-cancelled', { username: me.username });
+        io.to(roomId).emit('game:attack-window-closed');
+      }
       room.removePlayer(me.userId);
       if (room.status === 'waiting' && room.players.length === 0) {
         clearTimers(room);
