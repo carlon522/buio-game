@@ -409,6 +409,22 @@ input,select{font-family:inherit}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 
+/* Peek inline countdown bar (shown during in-hand reveal, no fullscreen popup) */
+.peek-inline-bar{
+  display:flex;align-items:center;gap:.65rem;flex-shrink:0;
+  padding:.3rem .75rem;
+  background:rgba(0,0,0,.5);border-bottom:1px solid rgba(196,133,59,.15);
+}
+.peek-inline-label{font-size:.72rem;font-weight:700;color:var(--gold-lt);white-space:nowrap}
+.peek-inline-prog-wrap{flex:1;height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden}
+.peek-inline-prog{height:100%;background:var(--gold);border-radius:2px}
+.peek-ready-btn{font-size:.72rem;padding:.2rem .65rem;white-space:nowrap;flex-shrink:0}
+
+/* Discard card shown in attack announce bar */
+.ann-discard-card{display:flex;align-items:center;flex-shrink:0}
+.ann-discard-card .card-3d{width:38px;height:58px;pointer-events:none}
+.ann-discard-card .card-front img{object-fit:cover}
+
 /* Activity bar — single horizontal scrolling strip between table and hand */
 .activity-bar{
   flex-shrink:0;

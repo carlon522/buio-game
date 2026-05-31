@@ -104,7 +104,7 @@
       <p class="hint-text">Hai <strong id="peek-timer-val">10</strong>s — poi tornano coperte per sempre!</p>
       <div id="peek-cards" class="peek-cards-row"></div>
       <div class="peek-bar-wrap"><div id="peek-progress" class="peek-bar"></div></div>
-      <button id="btn-ready" class="btn-primary">✓ Ho memorizzato</button>
+      <button class="btn-primary">✓ Ho memorizzato</button>
     </div>
   </div>
 
@@ -211,6 +211,12 @@
     </div><!-- /table-stage -->
 
     <!-- ACTIVITY BAR — one-line scrolling log between table and hand -->
+    <!-- PEEK INLINE countdown bar (shown during in-hand peek, no popup) -->
+    <div id="peek-inline" class="peek-inline-bar hidden">
+      <span class="peek-inline-label">👁 <strong id="peek-secs-inline">10</strong>s</span>
+      <div class="peek-inline-prog-wrap"><div id="peek-prog-inline" class="peek-inline-prog"></div></div>
+      <button id="btn-ready" class="btn-ghost peek-ready-btn">✓ Ho memorizzato</button>
+    </div>
     <div id="game-log" class="activity-bar"></div>
 
     <!-- MY AREA — fixed at bottom -->

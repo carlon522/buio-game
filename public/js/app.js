@@ -15,6 +15,10 @@ const S = {
   _skipDiscard:false,       // true while a card is flying TO the discard pile
   _pendingDiscardCard:null, // card to show in pile once animation completes
   _attackRevealActive:false,// true during the 5s attack reveal overlay — ALL actions paused
+  _peekRevealed:null,       // Set of visual indices currently flipped face-up for peek
+  _peekDuration:0,          // ms of peek timer
+  _nove9Mode:false,         // true when card 9 is active and user must tap a hand card
+  _tempRevealServerIdx:null,// server card index temporarily shown face-up (card 9)
   gameLog:[], _selIdx:-1,
   _atkCdInt:null,
 };
@@ -238,7 +242,7 @@ socket.on('game:starting',()=>{
   clearTimeout(window._dealBusyFallback);
   window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
-  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;
+  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -305,17 +309,38 @@ function runDealAnimation(cb) {
   setTimeout(()=>cb?.(), totalCards * 130 + 200);
 }
 
-// ── Peek ──────────────────────────────────────────────────────────────────
+// ── Peek — cards flip face-up IN THE HAND (no popup) ─────────────────────
 function showPeekOverlay({cards,duration}){
-  S.peekCards=cards; show($('panel-peek'));
+  // Called after deal animation completes
+  S.peekCards = cards;
+  S._peekDuration = duration;
+  S._peekRevealed = new Set([0, 1]); // first two visual positions flip up
+
+  renderMyHand(); // renders cards 0,1 as face-up (they have actual card data in privateState)
+
+  // Inline countdown bar in my-area
+  show($('peek-inline'));
   $('btn-ready').disabled=false;$('btn-ready').textContent='✓ Ho memorizzato';
-  $('peek-cards').innerHTML=cards.map(c=>cardHTML({...c,known:true},{cls:'anim-appear'})).join('');
-  const prog=$('peek-progress');
-  prog.style.transition='none';prog.style.width='100%';
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{prog.style.transition=`width ${duration}ms linear`;prog.style.width='0%';}));
-  let secs=Math.ceil(duration/1000);$('peek-timer-val').textContent=secs;
+  const prog=$('peek-prog-inline');
+  if(prog){ prog.style.transition='none';prog.style.width='100%';
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{prog.style.transition=`width ${duration}ms linear`;prog.style.width='0%';})); }
+  let secs=Math.ceil(duration/1000);
+  $('peek-secs-inline').textContent=secs;
   clearInterval(S.peekCountdown);
-  S.peekCountdown=setInterval(()=>{secs--;$('peek-timer-val').textContent=Math.max(0,secs);if(secs<=0)clearInterval(S.peekCountdown);},1000);
+  S.peekCountdown=setInterval(()=>{secs--;$('peek-secs-inline').textContent=Math.max(0,secs);if(secs<=0)clearInterval(S.peekCountdown);},1000);
+}
+
+function closePeekInline(){
+  clearInterval(S.peekCountdown);
+  const old=new Set(S._peekRevealed||[]);
+  S._peekRevealed=null;
+  hide($('peek-inline'));
+  // Flip revealed cards back down with animation
+  const handEls=Array.from($('my-hand')?.querySelectorAll('.card-3d')||[]);
+  old.forEach(vi=>{
+    const el=handEls[vi];
+    if(el) flipCardDown(el);
+  });
 }
 
 socket.on('game:peek',data=>{
@@ -324,38 +349,45 @@ socket.on('game:peek',data=>{
 });
 
 socket.on('game:peek-ended',()=>{
-  clearInterval(S.peekCountdown);
-  hide($('panel-peek'));
+  closePeekInline();
   S.handOrder=null;
   renderBoard();renderTurnBanner();
-
-  // Simple stagger: cards deal from slightly above into position — no flying overlay
-  const handCards=Array.from($('my-hand')?.querySelectorAll('.card-3d')||[]);
-  handCards.forEach((el,i)=>{
-    el.style.opacity='0';
-    el.style.transform='translateY(-16px) scale(.88)';
-    setTimeout(()=>{
-      el.style.transition='opacity .35s ease-out,transform .35s ease-out';
-      el.style.opacity='';
-      el.style.transform='';
-      setTimeout(()=>{el.style.transition='';el.style.transform='';},380);
-    },i*90);
-  });
-
   SFX.play('Cardshuffle',0.5);
   addLog('Carte coperte — il gioco inizia!','gold');
-  // Remove old dead code below — it was causing the "cards already there" retarded animation
-  if(false){
-    const handCards2=[];
-    handCards2.forEach((fromRect,i)=>{
-      const fly=document.createElement('div');
-    });
-  } // end dead code
 });
 
 $('btn-ready').addEventListener('click',()=>{
+  closePeekInline();
   socket.emit('game:ready');$('btn-ready').disabled=true;$('btn-ready').textContent='In attesa degli altri…';
 });
+
+// Flip a card element down (face-down) with animation
+function flipCardDown(el){
+  if(!el) return;
+  el.style.transition='transform .25s ease-in';
+  el.style.transform='scaleX(0)';
+  setTimeout(()=>{
+    el.className='card-3d card-back';
+    el.innerHTML='';
+    el.style.transition='transform .25s ease-out';
+    el.style.transform='scaleX(1)';
+    setTimeout(()=>{ el.style.transform=''; el.style.transition=''; },280);
+  },250);
+}
+
+// Flip a card element up (face-up) with animation
+function flipCardUp(el, card){
+  if(!el||!card) return;
+  el.style.transition='transform .25s ease-in';
+  el.style.transform='scaleX(0)';
+  setTimeout(()=>{
+    el.className=`card-3d card-front${card.isSpecial?' is-special':''}`;
+    el.innerHTML=`<img src="/cards/${card.suit}_${card.value}.jpg" class="card-img" onerror="this.style.display='none';makeFB(this.parentElement,'${card.label}','${card.symbol}','${card.color==='red'?'red':'black'}')">`;
+    el.style.transition='transform .25s ease-out';
+    el.style.transform='scaleX(1)';
+    setTimeout(()=>{ el.style.transform=''; el.style.transition=''; },280);
+  },250);
+}
 
 // ── Board ─────────────────────────────────────────────────────────────────
 function renderBoard() {
@@ -461,11 +493,20 @@ function renderMyHand() {
     let cls='';
     if(inDiscard||inForcedDiscard) cls+=' clickable';
     if(S._attackMode) cls+=' atk-tgt';
+    if(S._nove9Mode) cls+=' clickable'; // nove9: tap to peek
     if(visualIdx===S._selIdx) cls+=' selected';
     const raise=S.cardRaise?.[visualIdx]||0;
     const raiseAttr=raise>0?` data-raise="${raise}"`:'';
-    // Keep slot invisible while a card is animating into it
     const hiddenAttr=S._animSlot===visualIdx?' style="visibility:hidden"':'';
+
+    // Show face-up if: in peek phase for this visual index, OR card 9 temp reveal
+    const isPeekUp=S._peekRevealed?.has(visualIdx);
+    const isTempUp=S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx;
+    if(isPeekUp||isTempUp){
+      const card=S.privateState?.hand?.[serverIdx];
+      if(card) return cardHTML({...card,known:true},{cls,index:visualIdx});
+    }
+
     return `<div class="card-3d card-back ${cls}"${raiseAttr}${hiddenAttr} data-index="${visualIdx}"></div>`;
   }).join('');
 
@@ -540,10 +581,22 @@ function renderActions() {
 
 // ── Hand click ────────────────────────────────────────────────────────────
 function onHandClick(visualIdx) {
-  if(S._attackRevealActive) return; // reveal in progress — ignore all input
+  if(S._attackRevealActive) return;
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
   const cardEl=$('my-hand').querySelectorAll('.card-3d')[visualIdx];
+
+  // ── Card 9 nove9 mode: tap to temporarily reveal a card ──
+  if(S._nove9Mode){
+    S._nove9Mode=false;
+    socket.emit('game:use-special-9',{cardIndex:serverIdx});
+    // Immediately flip up the tapped card; server will confirm via game:peeked
+    S._tempRevealServerIdx=serverIdx;
+    renderMyHand();renderActions();
+    // Auto-cover after 3s
+    setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },3000);
+    return;
+  }
 
   if(phase==='discard'&&isMe&&S.drawnCard){
     // Clicked card goes to discard pile
@@ -748,12 +801,11 @@ $('btn-knock').addEventListener('click',()=>{
 });
 $('btn-discard-drawn').addEventListener('click',discardDrawn);
 
-// ⚔ button: no server emit, just enter attack mode locally
+// ⚔ button: announce to ALL players first (server broadcasts to all)
 $('btn-attack').addEventListener('click',()=>{
-  S._attackMode=true;
   SFX.play('Attacknotify', 0.7);
+  socket.emit('game:announce-attack');
   hide($('btn-attack'));
-  renderMyHand();renderActions();renderTurnBanner();
 });
 
 // ── Drawn card ────────────────────────────────────────────────────────────
@@ -774,23 +826,17 @@ socket.on('game:drawn-card',({card,penalized})=>{
 // ── Special cards ─────────────────────────────────────────────────────────
 socket.on('game:special-prompt',({type,card})=>{S.specialPrompt={type,card};showSpecial(type,card);});
 function showSpecial(type,card){
+  if(type==='9'){
+    // Card 9: NO popup — activate nove9 mode so user taps a hand card directly
+    S._nove9Mode=true;
+    addLog('🔍 Nove: tocca una tua carta per sbirciare!','gold');
+    toast('👆 Tocca una carta della tua mano per sbirciare (3 secondi)','success',4000);
+    renderMyHand();renderActions(); // shows clickable hint on cards
+    return; // skip the panel entirely
+  }
+
   show($('panel-special'));
   $('special-card-preview').innerHTML=cardHTML({...card,known:true},{cls:'anim-appear'});
-
-  if(type==='9'){
-    $('special-title').textContent='🔍 Nove — Sbircia una Carta!';
-    $('special-desc').textContent='Hai scartato il 9. Scegli quale delle tue carte sbirciare (3 secondi).';
-    const count=S.gameState?.players.find(p=>p.userId===S.userId)?.cardCount??4;
-    $('special-actions').innerHTML=`<div class="special-hand-row">${Array(count).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>`;
-    $('special-actions').querySelectorAll('.card-3d').forEach(el=>{
-      el.addEventListener('click',()=>{
-        const vi=parseInt(el.dataset.index);
-        const si=S.handOrder?S.handOrder[vi]:vi;
-        socket.emit('game:use-special-9',{cardIndex:si});
-        hide($('panel-special'));
-      });
-    });
-  }
 
   if(type==='8'){
     $('special-title').textContent='🔄 Otto — Scambia una Carta!';
@@ -844,17 +890,23 @@ $('btn-special-skip').addEventListener('click',()=>{
 socket.on('game:peeked',({cardIndex,card})=>{
   if(S.privateState?.hand?.[cardIndex]) S.privateState.hand[cardIndex]={...card,known:true,index:cardIndex};
   renderScore();
-  // Show 3-second popup
-  document.querySelector('.peek-reveal-popup')?.remove();
-  const popup=document.createElement('div');
-  popup.className='peek-reveal-popup';
-  popup.innerHTML=`<div class="prp-label">👁 Posizione #${cardIndex+1} — Ricordala!</div><div class="prp-card">${cardHTML({...card,known:true})}</div><div class="prp-value">${card.label}${card.symbol} = ${card.value}pt</div><div class="prp-prog-wrap"><div class="prp-prog"></div></div>`;
-  document.body.appendChild(popup);
-  const prog=popup.querySelector('.prp-prog');
-  prog.style.width='100%';
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{prog.style.transition='width 3s linear';prog.style.width='0%';}));
-  setTimeout(()=>{popup.style.opacity='0';popup.style.transform='translate(-50%,-58%) scale(.88)';setTimeout(()=>popup.remove(),400);},3000);
-  toast(`👁 Posizione #${cardIndex+1}: ${card.label}${card.symbol} (${card.value}pt)`,'success',3500);
+  // Find which visual position corresponds to this server index and flip it up in-hand
+  const vi=(S.handOrder||[]).findIndex(si=>si===cardIndex);
+  if(vi>=0){
+    S._tempRevealServerIdx=cardIndex;
+    renderMyHand(); // shows card face-up
+    // Flip the specific card element with animation
+    const el=$('my-hand').querySelectorAll('.card-3d')[vi];
+    flipCardUp(el,card);
+    // Cover after 3s
+    setTimeout(()=>{
+      S._tempRevealServerIdx=null;
+      const coverEl=$('my-hand').querySelectorAll('.card-3d')[vi];
+      flipCardDown(coverEl);
+      setTimeout(()=>renderMyHand(),550);
+    },3000);
+  }
+  addLog(`👁 Posizione #${vi+1}: ricordatela!`,'gold');
 });
 
 socket.on('game:swapped',({receivedCard})=>{
@@ -1075,8 +1127,43 @@ socket.on('game:swap-reveal', ({initiatorUserId, initiatorUsername, targetUserId
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
-// attack-window-closed no longer used but kept as no-op for safety
+// attack-window-closed — safety reset
 socket.on('game:attack-window-closed',()=>{ S._attackMode=false; renderMyHand();renderActions();renderTurnBanner(); });
+
+// ── Attack announcement — shown to ALL players when ⚔ is pressed ─────────
+socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCard, duration})=>{
+  SFX.play('Attacknotify', 0.6);
+  const isAttacker = attackerUserId === S.userId;
+
+  // Show the announce bar with the discard card and suspense dots
+  const bar = $('attack-announce-bar');
+  show(bar);
+
+  // Put discard card into the bar
+  const cardEl = $('ann-discard-card');
+  if(cardEl && discardCard) {
+    const fb = discardCard.color==='red'?'red':'black';
+    cardEl.innerHTML=`<div class="card-3d card-front" style="width:40px;height:61px;pointer-events:none"><img src="/cards/${discardCard.suit}_${discardCard.value}.jpg" class="card-img" onerror="this.style.display='none';makeFB(this.parentElement,'${discardCard.label}','${discardCard.symbol}','${fb}')"></div>`;
+  }
+
+  $('ann-title').textContent = isAttacker ? '⚔ Seleziona la carta da usare!' : `⚔ ${esc(attackerUsername)} vuole attaccare!`;
+  $('ann-sub').textContent   = isAttacker ? 'Tocca una tua carta…' : 'Sta scegliendo la carta…';
+
+  // Progress bar
+  const prog=$('ann-progress');
+  if(prog){ prog.style.transition='none';prog.style.width='100%';
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{ prog.style.transition=`width ${duration}ms linear`; prog.style.width='0%'; })); }
+
+  // Countdown
+  let rem=duration/1000;$('ann-cd').textContent=Math.ceil(rem);
+  clearInterval(S._annCdInt);
+  S._annCdInt=setInterval(()=>{ rem-=.25;$('ann-cd').textContent=Math.max(0,Math.ceil(rem));if(rem<=0)clearInterval(S._annCdInt); },250);
+
+  // For the attacker: activate attack mode so they can pick a card
+  if(isAttacker){ S._attackMode=true; renderMyHand();renderActions(); }
+
+  addLog(`⚔ ${attackerUsername} sta attaccando!`,'danger');
+});
 
 // ── Knock ─────────────────────────────────────────────────────────────────
 socket.on('game:knocked',({username})=>{
