@@ -609,120 +609,138 @@ function onHandClick(visualIdx) {
   }
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
-    // Card flies to discard pile
-    // Create ghost at card's current position — stays visible while gap is open
-    const _cgr=cardEl.getBoundingClientRect();
-    const _st2=getComputedStyle(document.documentElement);
-    const _cw2=parseInt(_st2.getPropertyValue('--cw'))||66;
-    const _ch2=parseInt(_st2.getPropertyValue('--ch'))||100;
-    const _sg=document.createElement('div');
-    _sg.className='card-3d card-back';
-    _sg.style.cssText='position:fixed;left:'+_cgr.left+'px;top:'+_cgr.top+'px;width:'+_cgr.width+'px;height:'+_cgr.height+'px;z-index:9999;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.6);overflow:hidden;transition:none';
-    document.body.appendChild(_sg);
-    S._selfDiscardGhost=_sg;
-    S._skipDiscard=true;
     SFX.play('Card');
+    // ── Capture all positions BEFORE any DOM change ──────────────────────
+    const _cr=cardEl.getBoundingClientRect();
+    const _dp=$('discard-pile')?.getBoundingClientRect();
+    const _ds=$('drawn-slot')?.getBoundingClientRect(); // store NOW; slot may hide later
+    const _cs=getComputedStyle(document.documentElement);
+    const _cw=parseInt(_cs.getPropertyValue('--cw'))||66;
+    const _ch=parseInt(_cs.getPropertyValue('--ch'))||100;
 
-    // Update handOrder immediately so server indices stay correct:
-    // drawn card takes the last visual slot (face-down, hidden until gap closes)
-    const lastVI = S.handOrder.length - 1;
-    const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
+    // ── Update handOrder ─────────────────────────────────────────────────
+    const lastVI=S.handOrder.length-1;
+    const newOrder=S.handOrder.filter((_,i)=>i!==visualIdx);
     newOrder.push(serverIdx);
-    S.handOrder = newOrder;
-    if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
+    S.handOrder=newOrder;
+    if(S.cardRaise){const r=S.cardRaise.filter((_,i)=>i!==visualIdx);r.push(0);S.cardRaise=r;}
 
-    // Create drawn-card ghost immediately so it's never invisible during the animation
-    const _dsRect=$('drawn-slot')?.getBoundingClientRect();
-    const _st=getComputedStyle(document.documentElement);
-    const _cw=parseInt(_st.getPropertyValue('--cw'))||66;
-    const _ch=parseInt(_st.getPropertyValue('--ch'))||100;
-    let _drawnGhost=null;
-    if(_dsRect){
-      _drawnGhost=document.createElement('div');
-      _drawnGhost.className='card-3d card-back';
-      _drawnGhost.id='drawn-ghost';
-      _drawnGhost.style.cssText=`position:fixed;left:${_dsRect.left+_dsRect.width/2-_cw/2}px;top:${_dsRect.top+_dsRect.height/2-_ch/2}px;width:${_cw}px;height:${_ch}px;z-index:9998;margin:0;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55)`;
-      document.body.appendChild(_drawnGhost);
-    }
+    // ── Ghost 1: discarded card IMMEDIATELY flies to pile (face-down) ────
+    S._skipDiscard=true;
+    const _dg=document.createElement('div');
+    _dg.className='card-3d card-back';
+    _dg.style.cssText='position:fixed;left:'+_cr.left+'px;top:'+_cr.top+'px;width:'+_cr.width+'px;height:'+_cr.height+'px;z-index:9999;pointer-events:none;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.65);transition:none';
+    document.body.appendChild(_dg);
+    S._selfDiscardGhost=_dg; // game:card-discarded just stores card for pile render
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      if(!_dp)return;
+      _dg.style.transition='left 500ms cubic-bezier(.25,.46,.45,.94),top 500ms cubic-bezier(.25,.46,.45,.94),width 500ms,height 500ms';
+      _dg.style.left=(_dp.left+_dp.width/2-_cw/2)+'px';
+      _dg.style.top=(_dp.top+_dp.height/2-_ch/2)+'px';
+      _dg.style.width=_cw+'px'; _dg.style.height=_ch+'px';
+    }));
+    // When ghost lands: flip pile card in (CSS handles the reveal animation)
+    setTimeout(()=>{
+      _dg.remove(); S._skipDiscard=false;
+      const c=S._pendingDiscardCard||S.gameState?.discardTop;
+      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+    },560);
 
-    // Show gap where the card was; keep drawn-card slot hidden until gap closes
-    S._animSlot = lastVI;
-    S._gapSlotVI = visualIdx;
-    S._gapClosing = false;
+    // ── Show gap, keep drawn-slot visible ────────────────────────────────
+    S._animSlot=lastVI;
+    S._gapSlotVI=visualIdx;
+    S._gapClosing=false;
     renderMyHand();
-
     socket.emit('game:discard',{handIndex:serverIdx});
-    S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
+    S._selIdx=-1;
+    // DON'T hide drawn-slot yet — it stays visible until gap closes
 
-    // After 1.8s: collapse gap → cards shift → ghost flies from where drawn-slot was into hand
+    // ── After 0.9s: close gap, drawn card flies from stored position ─────
     setTimeout(()=>{
       S._gapClosing=true;
-      const gap=document.getElementById('hand-gap');
-      const afterGap=()=>{
+      const _gap=document.getElementById('hand-gap');
+      const _afterGap=()=>{
         S._gapSlotVI=null; S._gapClosing=false;
+        S.drawnCard=null; hide($('drawn-slot')); // hide NOW
         const lastEl=$('my-hand').querySelectorAll('.card-3d')[lastVI];
-        const ghost=document.getElementById('drawn-ghost')||_drawnGhost;
-        if(ghost && lastEl){
+        if(_ds && lastEl){
           const tr=lastEl.getBoundingClientRect();
-          ghost.style.transition='left .5s cubic-bezier(.25,.46,.45,.94),top .5s cubic-bezier(.25,.46,.45,.94)';
-          ghost.style.left=(tr.left+tr.width/2-_cw/2)+'px';
-          ghost.style.top=(tr.top+tr.height/2-_ch/2)+'px';
-          setTimeout(()=>{ ghost.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.25); },540);
-        } else {
-          if(ghost) ghost.remove();
-          S._animSlot=null; renderMyHand();
-        }
+          const dg2=document.createElement('div');
+          dg2.className='card-3d card-back';
+          dg2.style.cssText='position:fixed;left:'+(_ds.left+_ds.width/2-_cw/2)+'px;top:'+(_ds.top+_ds.height/2-_ch/2)+'px;width:'+_cw+'px;height:'+_ch+'px;z-index:9998;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
+          document.body.appendChild(dg2);
+          requestAnimationFrame(()=>requestAnimationFrame(()=>{
+            dg2.style.transition='left 440ms cubic-bezier(.25,.46,.45,.94),top 440ms cubic-bezier(.25,.46,.45,.94)';
+            dg2.style.left=(tr.left+tr.width/2-_cw/2)+'px';
+            dg2.style.top=(tr.top+tr.height/2-_ch/2)+'px';
+          }));
+          setTimeout(()=>{dg2.remove();S._animSlot=null;renderMyHand();SFX.play('Card',0.2);},480);
+        } else {S._animSlot=null;renderMyHand();}
       };
-      if(gap){ gap.classList.add('gap-closing'); setTimeout(afterGap,380); }
-      else afterGap();
-    },1800);
+      if(_gap){_gap.classList.add('gap-closing');setTimeout(_afterGap,300);}
+      else _afterGap();
+    },900);
     return;
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
-    const _cgrf=cardEl.getBoundingClientRect();
-    const _sg2=document.createElement('div');
-    _sg2.className='card-3d card-back';
-    _sg2.style.cssText='position:fixed;left:'+_cgrf.left+'px;top:'+_cgrf.top+'px;width:'+_cgrf.width+'px;height:'+_cgrf.height+'px;z-index:9999;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.6);overflow:hidden;transition:none';
-    document.body.appendChild(_sg2);
-    S._selfDiscardGhost=_sg2; S._skipDiscard=true;
     SFX.play('Card');
-    // Capture deck position for the fly-in of the replacement card
-    const _deckRect=$('deck-pile')?.getBoundingClientRect();
-    // Reset handOrder — server removes this card and appends a new one at end
+    const _crf2=cardEl.getBoundingClientRect();
+    const _dpf2=$('discard-pile')?.getBoundingClientRect();
+    const _dkf2=$('deck-pile')?.getBoundingClientRect();
+    const _cs2=getComputedStyle(document.documentElement);
+    const _cw2=parseInt(_cs2.getPropertyValue('--cw'))||66;
+    const _ch2=parseInt(_cs2.getPropertyValue('--ch'))||100;
+    // Ghost IMMEDIATELY flies to pile
+    S._skipDiscard=true;
+    const _fg=document.createElement('div');
+    _fg.className='card-3d card-back';
+    _fg.style.cssText='position:fixed;left:'+_crf2.left+'px;top:'+_crf2.top+'px;width:'+_crf2.width+'px;height:'+_crf2.height+'px;z-index:9999;pointer-events:none;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.65);transition:none';
+    document.body.appendChild(_fg);
+    S._selfDiscardGhost=_fg;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      if(!_dpf2)return;
+      _fg.style.transition='left 500ms cubic-bezier(.25,.46,.45,.94),top 500ms cubic-bezier(.25,.46,.45,.94),width 500ms,height 500ms';
+      _fg.style.left=(_dpf2.left+_dpf2.width/2-_cw2/2)+'px';
+      _fg.style.top=(_dpf2.top+_dpf2.height/2-_ch2/2)+'px';
+      _fg.style.width=_cw2+'px'; _fg.style.height=_ch2+'px';
+    }));
+    setTimeout(()=>{
+      _fg.remove(); S._skipDiscard=false;
+      const c=S._pendingDiscardCard||S.gameState?.discardTop;
+      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+    },560);
+    // Gap and handOrder
     S.handOrder=null;
-    S._gapSlotVI=visualIdx;
-    S._gapClosing=false;
+    S._gapSlotVI=visualIdx; S._gapClosing=false;
     renderMyHand();
     socket.emit('game:forced-discard',{handIndex:serverIdx});
     setTimeout(()=>{
       S._gapClosing=true;
-      const gap=document.getElementById('hand-gap');
-      const afterGap=()=>{
+      const _g2=document.getElementById('hand-gap');
+      const _af2=()=>{
         S._gapSlotVI=null; S._gapClosing=false;
-        // Fly new card (face-down) from deck into the rightmost hand slot
-        const st=getComputedStyle(document.documentElement);
-        const cw=parseInt(st.getPropertyValue('--cw'))||66;
-        const ch=parseInt(st.getPropertyValue('--ch'))||100;
-        const cards=$('my-hand').querySelectorAll('.card-3d');
-        const lastEl=cards[cards.length-1];
-        if(_deckRect && lastEl){
-          const tr=lastEl.getBoundingClientRect();
-          const ghost=document.createElement('div');
-          ghost.className='card-3d card-back';
-          ghost.style.cssText=`position:fixed;left:${_deckRect.left+_deckRect.width/2-cw/2}px;top:${_deckRect.top+_deckRect.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9999;margin:0;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.6)`;
-          document.body.appendChild(ghost);
+        // Replacement card flies from deck to last hand slot
+        const _cc=$('my-hand').querySelectorAll('.card-3d');
+        const _le=_cc[_cc.length-1];
+        if(_dkf2 && _le){
+          const _tr=_le.getBoundingClientRect();
+          const _rg=document.createElement('div');
+          _rg.className='card-3d card-back';
+          _rg.style.cssText='position:fixed;left:'+(_dkf2.left+_dkf2.width/2-_cw2/2)+'px;top:'+(_dkf2.top+_dkf2.height/2-_ch2/2)+'px;width:'+_cw2+'px;height:'+_ch2+'px;z-index:9998;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
+          document.body.appendChild(_rg);
           requestAnimationFrame(()=>requestAnimationFrame(()=>{
-            ghost.style.transition='left .52s cubic-bezier(.25,.46,.45,.94),top .52s cubic-bezier(.25,.46,.45,.94)';
-            ghost.style.left=(tr.left+tr.width/2-cw/2)+'px';
-            ghost.style.top=(tr.top+tr.height/2-ch/2)+'px';
+            _rg.style.transition='left 440ms cubic-bezier(.25,.46,.45,.94),top 440ms cubic-bezier(.25,.46,.45,.94),width 440ms,height 440ms';
+            _rg.style.left=(_tr.left+_tr.width/2-_cw2/2)+'px';
+            _rg.style.top=(_tr.top+_tr.height/2-_ch2/2)+'px';
+            _rg.style.width=_cw2+'px'; _rg.style.height=_ch2+'px';
           }));
-          setTimeout(()=>{ ghost.remove(); renderMyHand(); SFX.play('Card',0.25); },560);
+          setTimeout(()=>{_rg.remove();renderMyHand();SFX.play('Card',0.2);},480);
         } else renderMyHand();
       };
-      if(gap){ gap.classList.add('gap-closing'); setTimeout(afterGap,380); }
-      else afterGap();
-    },1800);
+      if(_g2){_g2.classList.add('gap-closing');setTimeout(_af2,300);}
+      else _af2();
+    },900);
     return;
   }
 
@@ -1088,23 +1106,9 @@ socket.on('game:card-discarded',({card, discarderId})=>{
   if(discarderId && String(discarderId) !== String(S.userId)){
     animOppDiscard(discarderId, card);
   } else if(S._selfDiscardGhost){
-    const ghost=S._selfDiscardGhost; S._selfDiscardGhost=null;
-    const dp=$('discard-pile'); const dr=dp&&dp.getBoundingClientRect();
-    const st=getComputedStyle(document.documentElement);
-    const tw=parseInt(st.getPropertyValue('--cw'))||66, th=parseInt(st.getPropertyValue('--ch'))||100;
-    ghost.style.transition='transform 0.2s ease-in'; ghost.style.transform='scaleX(0)';
-    setTimeout(()=>{
-      ghost.className='card-3d card-front'; ghost.style.overflow='hidden'; ghost.style.background='#f5f0e8';
-      ghost.innerHTML='<img src="/cards/'+card.suit+'_'+card.value+'.jpg" class="card-img">';
-      ghost.style.transition='transform 0.2s ease-out'; ghost.style.transform='scaleX(1)';
-      setTimeout(()=>{
-        if(!dr){ ghost.remove(); S._skipDiscard=false; renderDiscardPile(card); return; }
-        ghost.style.transition='left 480ms cubic-bezier(.25,.46,.45,.94),top 480ms cubic-bezier(.25,.46,.45,.94),width 480ms cubic-bezier(.25,.46,.45,.94),height 480ms cubic-bezier(.25,.46,.45,.94)';
-        ghost.style.left=(dr.left+dr.width/2-tw/2)+'px'; ghost.style.top=(dr.top+dr.height/2-th/2)+'px';
-        ghost.style.width=tw+'px'; ghost.style.height=th+'px';
-        setTimeout(()=>{ ghost.remove(); S._skipDiscard=false; const c=S._pendingDiscardCard||card; S._pendingDiscardCard=null; renderDiscardPile(c); },560);
-      },220);
-    },210);
+    // Ghost is already flying — just store card for pile render when ghost lands
+    S._selfDiscardGhost=null;
+    S._pendingDiscardCard=card;
   } else {
     if(!S._skipDiscard) setTimeout(()=>renderDiscardPile(card),50);
   }
