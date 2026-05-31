@@ -572,6 +572,9 @@ io.on('connection', socket => {
     const result = room.attack(me.userId, cardIndex);
     if (result.error) return socket.emit('game:error', { message: result.error });
 
+    // Cancel the 30s announce timer — attack was made, no need to auto-cancel
+    clearTimeout(room._announceTimer);
+
     // Pause the room for the reveal animation duration (5 s overlay on client)
     room._revealUntil = Date.now() + 5500;
 

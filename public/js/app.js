@@ -502,9 +502,15 @@ function renderMyHand() {
     // Show face-up if: in peek phase for this visual index, OR card 9 temp reveal
     const isPeekUp=S._peekRevealed?.has(visualIdx);
     const isTempUp=S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx;
-    if(isPeekUp||isTempUp){
-      const card=S.privateState?.hand?.[serverIdx];
+    if(isPeekUp){
+      // Use peekCards data — privateState.hand still has known:false during peek phase
+      const card=S.peekCards?.[visualIdx];
       if(card) return cardHTML({...card,known:true},{cls,index:visualIdx});
+    }
+    if(isTempUp){
+      // Nove9 temp reveal — privateState was updated by game:peeked before this renders
+      const card=S.privateState?.hand?.[serverIdx];
+      if(card&&card.suit) return cardHTML({...card,known:true},{cls,index:visualIdx});
     }
 
     return `<div class="card-3d card-back ${cls}"${raiseAttr}${hiddenAttr} data-index="${visualIdx}"></div>`;
@@ -801,11 +807,14 @@ $('btn-knock').addEventListener('click',()=>{
 });
 $('btn-discard-drawn').addEventListener('click',discardDrawn);
 
-// ⚔ button: announce to ALL players first (server broadcasts to all)
+// ⚔ button: enter attack mode IMMEDIATELY (don't wait for server round-trip)
+// then announce to others so they see the banner
 $('btn-attack').addEventListener('click',()=>{
   SFX.play('Attacknotify', 0.7);
-  socket.emit('game:announce-attack');
+  S._attackMode=true;      // cards become clickable right now
   hide($('btn-attack'));
+  renderMyHand();renderActions();renderTurnBanner();
+  socket.emit('game:announce-attack'); // broadcast announcement to all other players
 });
 
 // ── Drawn card ────────────────────────────────────────────────────────────
@@ -1159,8 +1168,8 @@ socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCar
   clearInterval(S._annCdInt);
   S._annCdInt=setInterval(()=>{ rem-=.25;$('ann-cd').textContent=Math.max(0,Math.ceil(rem));if(rem<=0)clearInterval(S._annCdInt); },250);
 
-  // For the attacker: activate attack mode so they can pick a card
-  if(isAttacker){ S._attackMode=true; renderMyHand();renderActions(); }
+  // For the attacker: _attackMode already set by button click — just re-render to be safe
+  if(isAttacker && !S._attackMode){ S._attackMode=true; renderMyHand();renderActions(); }
 
   addLog(`⚔ ${attackerUsername} sta attaccando!`,'danger');
 });
