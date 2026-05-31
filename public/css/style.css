@@ -358,6 +358,8 @@ input,select{font-family:inherit}
   position:relative;overflow:hidden;
 }
 .mini-card::after{content:'B';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:900;font-style:italic;color:rgba(196,133,59,.45)}
+.card-new-pop{animation:card-pop-in .32s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes card-pop-in{from{transform:scale(0) translateY(6px);opacity:0}to{transform:scale(1);opacity:1}}
 .seat-info{display:flex;flex-direction:column;align-items:center;gap:.2rem;
   background:rgba(0,0,0,.55);border-radius:8px;padding:.35rem .65rem;
   border:1px solid rgba(196,133,59,.12);min-width:64px;text-align:center;

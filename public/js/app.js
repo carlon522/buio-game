@@ -207,7 +207,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._gapSlotVI=null;S._gapClosing=false; }
+  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._gapSlotVI=null;S._gapClosing=false;S._selfDiscardGhost=null;S._justDrewSet=null; }
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
@@ -442,7 +442,8 @@ function renderSeats() {
     seat.className=`seat${player.isCurrentPlayer&&!player.isEliminated?' seat-active':''}${player.isEliminated?' seat-elim':''}`;
     seat.style.left=pos.x+'%';seat.style.top=pos.y+'%';
     seat.setAttribute('data-user-id', player.userId);
-    const minis=Array(Math.max(0,player.cardCount)).fill(0).map(()=>`<div class="mini-card"></div>`).join('');
+    const justDrew=S._justDrewSet&&S._justDrewSet.has(player.userId);
+    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>'<div class="mini-card'+(justDrew&&i===a.length-1?' card-new-pop':'')+'"></div>').join('');
     seat.innerHTML=`
       <div class="seat-cards">${minis}</div>
       <div class="seat-info">
@@ -453,6 +454,7 @@ function renderSeats() {
       ${player.isEliminated?'<div class="seat-elim-badge">☠</div>':''}`;
     container.appendChild(seat);
   });
+  S._justDrewSet=null;
 }
 
 // ── My info ───────────────────────────────────────────────────────────────
@@ -614,7 +616,17 @@ function onHandClick(visualIdx) {
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
     // Card flies to discard pile
-    flyAnim(cardEl,$('discard-pile'));
+    // Create ghost at card's current position — stays visible while gap is open
+    const _cgr=cardEl.getBoundingClientRect();
+    const _st2=getComputedStyle(document.documentElement);
+    const _cw2=parseInt(_st2.getPropertyValue('--cw'))||66;
+    const _ch2=parseInt(_st2.getPropertyValue('--ch'))||100;
+    const _sg=document.createElement('div');
+    _sg.className='card-3d card-back';
+    _sg.style.cssText='position:fixed;left:'+_cgr.left+'px;top:'+_cgr.top+'px;width:'+_cgr.width+'px;height:'+_cgr.height+'px;z-index:9999;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.6);overflow:hidden;transition:none';
+    document.body.appendChild(_sg);
+    S._selfDiscardGhost=_sg;
+    S._skipDiscard=true;
     SFX.play('Card');
 
     // Update handOrder immediately so server indices stay correct:
@@ -674,7 +686,12 @@ function onHandClick(visualIdx) {
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
-    flyAnim(cardEl,$('discard-pile'));
+    const _cgrf=cardEl.getBoundingClientRect();
+    const _sg2=document.createElement('div');
+    _sg2.className='card-3d card-back';
+    _sg2.style.cssText='position:fixed;left:'+_cgrf.left+'px;top:'+_cgrf.top+'px;width:'+_cgrf.width+'px;height:'+_cgrf.height+'px;z-index:9999;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.6);overflow:hidden;transition:none';
+    document.body.appendChild(_sg2);
+    S._selfDiscardGhost=_sg2; S._skipDiscard=true;
     SFX.play('Card');
     // Capture deck position for the fly-in of the replacement card
     const _deckRect=$('deck-pile')?.getBoundingClientRect();
@@ -1004,14 +1021,29 @@ socket.on('game:forced-discard-next',({username})=>{
 
 // ── New card on discard pile — ⚔ becomes available ───────────────────────
 socket.on('game:card-discarded',({card, discarderId})=>{
-  // Store the card — renderDiscardPile will pick it up once animation finishes
   S._pendingDiscardCard = card;
-  if (discarderId && discarderId !== S.userId) {
-    animOppDiscard(discarderId); // sets _skipDiscard; renders pile in its callback
+  if(discarderId && String(discarderId) !== String(S.userId)){
+    animOppDiscard(discarderId, card);
+  } else if(S._selfDiscardGhost){
+    const ghost=S._selfDiscardGhost; S._selfDiscardGhost=null;
+    const dp=$('discard-pile'); const dr=dp&&dp.getBoundingClientRect();
+    const st=getComputedStyle(document.documentElement);
+    const tw=parseInt(st.getPropertyValue('--cw'))||66, th=parseInt(st.getPropertyValue('--ch'))||100;
+    ghost.style.transition='transform 0.2s ease-in'; ghost.style.transform='scaleX(0)';
+    setTimeout(()=>{
+      ghost.className='card-3d card-front'; ghost.style.overflow='hidden'; ghost.style.background='#f5f0e8';
+      ghost.innerHTML='<img src="/cards/'+card.suit+'_'+card.value+'.jpg" class="card-img">';
+      ghost.style.transition='transform 0.2s ease-out'; ghost.style.transform='scaleX(1)';
+      setTimeout(()=>{
+        if(!dr){ ghost.remove(); S._skipDiscard=false; renderDiscardPile(card); return; }
+        ghost.style.transition='left 480ms cubic-bezier(.25,.46,.45,.94),top 480ms cubic-bezier(.25,.46,.45,.94),width 480ms cubic-bezier(.25,.46,.45,.94),height 480ms cubic-bezier(.25,.46,.45,.94)';
+        ghost.style.left=(dr.left+dr.width/2-tw/2)+'px'; ghost.style.top=(dr.top+dr.height/2-th/2)+'px';
+        ghost.style.width=tw+'px'; ghost.style.height=th+'px';
+        setTimeout(()=>{ ghost.remove(); S._skipDiscard=false; const c=S._pendingDiscardCard||card; S._pendingDiscardCard=null; renderDiscardPile(c); },560);
+      },220);
+    },210);
   } else {
-    // Self-discard: flyAnim already set _skipDiscard; pile renders in its callback
-    // Fallback: if somehow _skipDiscard is not set, render after short delay
-    if(!S._skipDiscard) setTimeout(()=>renderDiscardPile(card), 50);
+    if(!S._skipDiscard) setTimeout(()=>renderDiscardPile(card),50);
   }
   addLog(`${cardStr(card)} scartata`,'info');
   renderActions();
@@ -1352,25 +1384,51 @@ function ghostFly(fromRect, toRect, durationMs=600, mini=false, onDone) {
 // Opponent draws: deck → their seat (mini ghost)
 function animOppDraw(userId) {
   const dk=$('deck-pile');
-  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+  const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
   if (!dk||!seat) return;
   SFX.play('Card', 0.35);
-  ghostFly(dk.getBoundingClientRect(), seat.getBoundingClientRect(), 580, true);
+  const fr=dk.getBoundingClientRect(), tr=seat.getBoundingClientRect();
+  const st=getComputedStyle(document.documentElement);
+  const cw=parseInt(st.getPropertyValue('--cw'))||66, ch=parseInt(st.getPropertyValue('--ch'))||100;
+  const mw=28, mh=43;
+  const g=document.createElement('div');
+  g.className='card-3d card-back';
+  g.style.cssText='position:fixed;left:'+(fr.left+fr.width/2-cw/2)+'px;top:'+(fr.top+fr.height/2-ch/2)+'px;width:'+cw+'px;height:'+ch+'px;z-index:9990;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
+  document.body.appendChild(g);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    g.style.transition='left 520ms cubic-bezier(.25,.46,.45,.94),top 520ms cubic-bezier(.25,.46,.45,.94),width 520ms cubic-bezier(.25,.46,.45,.94),height 520ms cubic-bezier(.25,.46,.45,.94)';
+    g.style.left=(tr.left+tr.width/2-mw/2)+'px'; g.style.top=(tr.top+tr.height/2-mh/2)+'px';
+    g.style.width=mw+'px'; g.style.height=mh+'px';
+  }));
+  setTimeout(()=>g.remove(), 620);
 }
 
-// Opponent discards: seat → discard pile (mini ghost)
-function animOppDiscard(userId) {
-  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+// Opponent discards: flip face-up at seat, scale up to pile size
+function animOppDiscard(userId, card) {
+  const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
   const dp=$('discard-pile');
   if (!seat||!dp) return;
   SFX.play('Card', 0.4);
-  S._skipDiscard=true; // block pile render until ghost arrives
-  ghostFly(seat.getBoundingClientRect(), dp.getBoundingClientRect(), 560, true, ()=>{
-    S._skipDiscard=false;
-    const c=S._pendingDiscardCard||S.gameState?.discardTop;
-    S._pendingDiscardCard=null;
-    if(c) renderDiscardPile(c);
-  });
+  S._skipDiscard=true;
+  const sr=seat.getBoundingClientRect(), dr=dp.getBoundingClientRect();
+  const st=getComputedStyle(document.documentElement);
+  const tw=parseInt(st.getPropertyValue('--cw'))||66, th=parseInt(st.getPropertyValue('--ch'))||100;
+  const mw=28, mh=43;
+  const g=document.createElement('div');
+  g.className='card-3d card-back';
+  g.style.cssText='position:fixed;left:'+(sr.left+sr.width/2-mw/2)+'px;top:'+(sr.top+sr.height/2-mh/2)+'px;width:'+mw+'px;height:'+mh+'px;z-index:9995;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.55);border-radius:3px;overflow:hidden;transition:none';
+  document.body.appendChild(g);
+  g.style.transition='transform 0.18s ease-in'; g.style.transform='scaleX(0)';
+  setTimeout(()=>{
+    if(card){ g.className='card-3d card-front'; g.style.background='#f5f0e8'; g.innerHTML='<img src="/cards/'+card.suit+'_'+card.value+'.jpg" class="card-img">'; }
+    g.style.transition='transform 0.18s ease-out'; g.style.transform='scaleX(1)';
+    setTimeout(()=>{
+      g.style.transition='left 480ms cubic-bezier(.25,.46,.45,.94),top 480ms cubic-bezier(.25,.46,.45,.94),width 480ms cubic-bezier(.25,.46,.45,.94),height 480ms cubic-bezier(.25,.46,.45,.94),border-radius 480ms';
+      g.style.left=(dr.left+dr.width/2-tw/2)+'px'; g.style.top=(dr.top+dr.height/2-th/2)+'px';
+      g.style.width=tw+'px'; g.style.height=th+'px'; g.style.borderRadius='6px';
+      setTimeout(()=>{ g.remove(); S._skipDiscard=false; const c=S._pendingDiscardCard||S.gameState&&S.gameState.discardTop; S._pendingDiscardCard=null; if(c) renderDiscardPile(c); }, 560);
+    }, 200);
+  }, 190);
 }
 
 // ── Track opponent card counts to detect draws ────────────────────────────
@@ -1382,7 +1440,7 @@ function checkOppCardChanges(newState) {
     if (p.userId === S.userId) { _prevCounts[p.userId]=p.cardCount; return; }
     const prev = _prevCounts[p.userId];
     if (prev !== undefined && p.cardCount > prev) {
-      // Card count increased → they drew
+      S._justDrewSet=S._justDrewSet||new Set(); S._justDrewSet.add(p.userId);
       animOppDraw(p.userId);
     }
     _prevCounts[p.userId] = p.cardCount;
