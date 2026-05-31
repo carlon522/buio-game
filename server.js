@@ -597,6 +597,10 @@ io.on('connection', socket => {
     } else if (result.type === 'scoring' || result.type === 'gameover') {
       broadcastScoring(room.id, result);
     } else {
+      // Reveal the replacement card to the player briefly (they should see what they picked up)
+      const player = room.players.find(p => p.userId === me.userId);
+      const replacementCard = player?.hand[player.hand.length - 1];
+      if (replacementCard) socket.emit('game:forced-draw-reveal', { card: replacementCard, serverIndex: player.hand.length - 1 });
       sendPrivateToAll(room);
       startTurnTimer(room);
       const cur = room.getCurrentPlayer();
@@ -604,7 +608,7 @@ io.on('connection', socket => {
       if (result.discardedCard?.value === 10) {
         io.to(room.id).emit('game:forced-discard-next', { username: me.username });
       }
-      triggerBot(room.id);  // kick bot if it's their turn next
+      triggerBot(room.id);
     }
   });
 
@@ -873,6 +877,8 @@ function autoPlayTurn(roomId) {
   if (!room || room.phase !== 'draw') return;
   const cur = room.getCurrentPlayer();
   if (!cur) return;
+  // Never auto-advance human players — only bots have a separate trigger system
+  if (!isBot(cur.userId)) return;
 
   const drawRes = room.drawFromDeck(cur.userId);
   if (drawRes.error) return;
