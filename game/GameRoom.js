@@ -214,39 +214,49 @@ class GameRoom {
     if (!player) return { error: 'Player not found' };
     if (handIndex < 0 || handIndex >= player.hand.length) return { error: 'Invalid card' };
 
-    // 1. Discard the chosen hand card
-    const discardedCard = player.hand.splice(handIndex, 1)[0];
-    const newSeen = new Set();
-    for (const idx of player.seenCards) {
-      if (idx < handIndex) newSeen.add(idx);
-      else if (idx > handIndex) newSeen.add(idx - 1);
-    }
-    player.seenCards = newSeen;
-    this.discardPile.push(discardedCard);
-    this.lastDiscard = discardedCard;
+    const discardedCard = player.hand[handIndex];
 
-    // 2a. Special card (8 or 9): trigger special BEFORE drawing replacement
+    // 2a. Special card (8 or 9): splice out, replacement appended after special
+    //     completes (rare path; client resyncs hand order).
     if (discardedCard.value === 8 || discardedCard.value === 9) {
+      player.hand.splice(handIndex, 1);
+      const newSeen = new Set();
+      for (const idx of player.seenCards) {
+        if (idx < handIndex) newSeen.add(idx);
+        else if (idx > handIndex) newSeen.add(idx - 1);
+      }
+      player.seenCards = newSeen;
+      this.discardPile.push(discardedCard);
+      this.lastDiscard = discardedCard;
       this._pendingForcedDiscardDraw = true;
       this.phase = 'special';
       return { discardedCard, success: true, specialType: discardedCard.value };
     }
 
-    // 2b. 10 card discarded during forced-discard: chain the effect
+    // 2b. Normal: REPLACE IN PLACE so the card position is preserved (memory-friendly)
+    this.discardPile.push(discardedCard);
+    this.lastDiscard = discardedCard;
+    player.seenCards.delete(handIndex); // the replacement is unknown until revealed
+
     if (discardedCard.value === 10) this.forcedDiscardNext = true;
 
-    // 3. Automatically draw a replacement card, then advance turn
-    let drawnCard = null;
+    // 3. Draw replacement INTO THE SAME SLOT
     if (this.deck.length === 0 && this.discardPile.length > 1) {
       const top = this.discardPile.pop();
       this.deck = shuffle(this.discardPile);
       this.discardPile = top ? [top] : [];
     }
+    let drawnCard = null, collapsed = false;
     if (this.deck.length > 0) {
       drawnCard = this.deck.pop();
-      player.hand.push(drawnCard);
+      player.hand[handIndex] = drawnCard;
+    } else {
+      player.hand.splice(handIndex, 1); // no card to draw: slot collapses
+      collapsed = true;
     }
-    return this._advanceTurn(discardedCard, drawnCard);
+    const result = this._advanceTurn(discardedCard, drawnCard);
+    result.replaceSlot = collapsed ? -1 : handIndex;
+    return result;
   }
 
   _advanceTurn(discardedCard, drawnCard = null) {

@@ -640,6 +640,11 @@ io.on('connection', socket => {
         }
       }, 30000);
     } else {
+      // Reveal the replacement card (drawn into the same slot) to the player
+      const player = room.players.find(p => p.userId === me.userId);
+      if (result.replaceSlot >= 0 && player?.hand[result.replaceSlot]) {
+        socket.emit('game:forced-draw-reveal', { card: player.hand[result.replaceSlot], serverIndex: result.replaceSlot });
+      }
       sendPrivateToAll(room);
       advanceTurnInRoom(room.id, result);
     }

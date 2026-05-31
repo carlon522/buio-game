@@ -207,7 +207,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._gapSlotVI=null;S._gapClosing=false;S._selfDiscardGhost=null;S._justDrewSet=null; }
+  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._selfDiscardGhost=null;S._animSlot=null;S._skipDiscard=false; }
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
@@ -236,7 +236,7 @@ socket.on('game:private',priv=>{
   // Always sync drawn card from authoritative server state.
   // priv.drawnCard is non-null only when you are current player with a drawn card.
   // This restores the drawn card if an attack interrupted the discard phase.
-  if(!S._animSlot) S.drawnCard = priv?.drawnCard || null;
+  if(S._animSlot===null) S.drawnCard = priv?.drawnCard || null;
   renderMyHand();renderScore();renderActions();renderTurnBanner();
   priv?.penalized?show($('penalized-pill')):hide($('penalized-pill'));
 });
@@ -442,8 +442,10 @@ function renderSeats() {
     seat.className=`seat${player.isCurrentPlayer&&!player.isEliminated?' seat-active':''}${player.isEliminated?' seat-elim':''}`;
     seat.style.left=pos.x+'%';seat.style.top=pos.y+'%';
     seat.setAttribute('data-user-id', player.userId);
-    const justDrew=S._justDrewSet&&S._justDrewSet.has(player.userId);
-    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>'<div class="mini-card'+(justDrew&&i===a.length-1?' card-new-pop':'')+'"></div>').join('');
+    // While a draw ghost is in flight to this seat, keep the newest mini-card
+    // hidden (reserve its space) so the card doesn't appear before the ghost lands.
+    const drawing=S._drawingSet&&S._drawingSet.has(player.userId);
+    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>'<div class="mini-card'+(drawing&&i===a.length-1?' mini-incoming':'')+'"></div>').join('');
     seat.innerHTML=`
       <div class="seat-cards">${minis}</div>
       <div class="seat-info">
@@ -454,7 +456,6 @@ function renderSeats() {
       ${player.isEliminated?'<div class="seat-elim-badge">☠</div>':''}`;
     container.appendChild(seat);
   });
-  S._justDrewSet=null;
 }
 
 // ── My info ───────────────────────────────────────────────────────────────
@@ -512,15 +513,6 @@ function renderMyHand() {
 
     return `<div class="card-3d card-back ${cls}"${raiseAttr}${hiddenAttr} data-index="${visualIdx}"></div>`;
   }).join('');
-
-  // Re-inject gap hole at the correct visual position after every innerHTML rebuild
-  if(S._gapSlotVI !== null && !S._gapClosing){
-    const _gc = handEl.querySelectorAll('.card-3d');
-    const _gp = document.createElement('div');
-    _gp.className = 'card-gap-hole'; _gp.id = 'hand-gap';
-    if(S._gapSlotVI < _gc.length) handEl.insertBefore(_gp, _gc[S._gapSlotVI]);
-    else handEl.appendChild(_gp);
-  }
 
   handEl.querySelectorAll('.card-3d').forEach((el,vi)=>{
     el.addEventListener('click',()=>onHandClick(vi));
@@ -591,6 +583,7 @@ function renderActions() {
 // ── Hand click ────────────────────────────────────────────────────────────
 function onHandClick(visualIdx) {
   if(S._attackRevealActive) return;
+  if(S._animSlot!==null && !S._attackMode && !S._nove9Mode) return; // ignore clicks mid-discard-animation
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
   const cardEl=$('my-hand').querySelectorAll('.card-3d')[visualIdx];
@@ -610,137 +603,68 @@ function onHandClick(visualIdx) {
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
     SFX.play('Card');
-    // ── Capture all positions BEFORE any DOM change ──────────────────────
-    const _cr=cardEl.getBoundingClientRect();
-    const _dp=$('discard-pile')?.getBoundingClientRect();
-    const _ds=$('drawn-slot')?.getBoundingClientRect(); // store NOW; slot may hide later
-    const _cs=getComputedStyle(document.documentElement);
-    const _cw=parseInt(_cs.getPropertyValue('--cw'))||66;
-    const _ch=parseInt(_cs.getPropertyValue('--ch'))||100;
+    // Server replaces the card IN PLACE: hand[serverIdx] becomes the drawn card.
+    // So handOrder is UNCHANGED — the slot keeps its position. No reflow, no shuffle.
+    const slotRect=cardEl.getBoundingClientRect();
+    const pileRect=$('discard-pile')?.getBoundingClientRect();
+    const drawnRect=$('drawn-slot')?.getBoundingClientRect();
+    const drawnData=S.drawnCard;
 
-    // ── Update handOrder ─────────────────────────────────────────────────
-    const lastVI=S.handOrder.length-1;
-    const newOrder=S.handOrder.filter((_,i)=>i!==visualIdx);
-    newOrder.push(serverIdx);
-    S.handOrder=newOrder;
-    if(S.cardRaise){const r=S.cardRaise.filter((_,i)=>i!==visualIdx);r.push(0);S.cardRaise=r;}
-
-    // ── Ghost 1: discarded card IMMEDIATELY flies to pile (face-down) ────
     S._skipDiscard=true;
-    const _dg=document.createElement('div');
-    _dg.className='card-3d card-back';
-    _dg.style.cssText='position:fixed;left:'+_cr.left+'px;top:'+_cr.top+'px;width:'+_cr.width+'px;height:'+_cr.height+'px;z-index:9999;pointer-events:none;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.65);transition:none';
-    document.body.appendChild(_dg);
-    S._selfDiscardGhost=_dg; // game:card-discarded just stores card for pile render
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      if(!_dp)return;
-      _dg.style.transition='left 500ms cubic-bezier(.25,.46,.45,.94),top 500ms cubic-bezier(.25,.46,.45,.94),width 500ms,height 500ms';
-      _dg.style.left=(_dp.left+_dp.width/2-_cw/2)+'px';
-      _dg.style.top=(_dp.top+_dp.height/2-_ch/2)+'px';
-      _dg.style.width=_cw+'px'; _dg.style.height=_ch+'px';
-    }));
-    // When ghost lands: flip pile card in (CSS handles the reveal animation)
-    setTimeout(()=>{
-      _dg.remove(); S._skipDiscard=false;
-      const c=S._pendingDiscardCard||S.gameState?.discardTop;
-      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
-    },560);
-
-    // ── Show gap, keep drawn-slot visible ────────────────────────────────
-    S._animSlot=lastVI;
-    S._gapSlotVI=visualIdx;
-    S._gapClosing=false;
+    S._animSlot=visualIdx;        // hold this slot empty (visibility:hidden, keeps layout)
     renderMyHand();
     socket.emit('game:discard',{handIndex:serverIdx});
     S._selIdx=-1;
-    // DON'T hide drawn-slot yet — it stays visible until gap closes
 
-    // ── After 0.9s: close gap, drawn card flies from stored position ─────
+    // Ghost A — the discarded hand card flies face-down to the pile, reveals on landing
+    const gA=flyGhost(slotRect, pileRect, { dur:460, z:9999, onLand:(g)=>{
+      const c=S._pendingDiscardCard||S.gameState?.discardTop;
+      S._pendingDiscardCard=null; g?.remove(); S._skipDiscard=false;
+      if(c) renderDiscardPile(c);
+    }});
+    S._selfDiscardGhost=gA;
+
+    // Ghost B — the drawn card flies face-up from the drawn-slot INTO the same slot,
+    // holds face-up so you memorise its new home, then flips face-down.
     setTimeout(()=>{
-      S._gapClosing=true;
-      const _gap=document.getElementById('hand-gap');
-      const _afterGap=()=>{
-        S._gapSlotVI=null; S._gapClosing=false;
-        S.drawnCard=null; hide($('drawn-slot')); // hide NOW
-        const lastEl=$('my-hand').querySelectorAll('.card-3d')[lastVI];
-        if(_ds && lastEl){
-          const tr=lastEl.getBoundingClientRect();
-          const dg2=document.createElement('div');
-          dg2.className='card-3d card-back';
-          dg2.style.cssText='position:fixed;left:'+(_ds.left+_ds.width/2-_cw/2)+'px;top:'+(_ds.top+_ds.height/2-_ch/2)+'px;width:'+_cw+'px;height:'+_ch+'px;z-index:9998;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
-          document.body.appendChild(dg2);
-          requestAnimationFrame(()=>requestAnimationFrame(()=>{
-            dg2.style.transition='left 440ms cubic-bezier(.25,.46,.45,.94),top 440ms cubic-bezier(.25,.46,.45,.94)';
-            dg2.style.left=(tr.left+tr.width/2-_cw/2)+'px';
-            dg2.style.top=(tr.top+tr.height/2-_ch/2)+'px';
-          }));
-          setTimeout(()=>{dg2.remove();S._animSlot=null;renderMyHand();SFX.play('Card',0.2);},480);
-        } else {S._animSlot=null;renderMyHand();}
-      };
-      if(_gap){_gap.classList.add('gap-closing');setTimeout(_afterGap,300);}
-      else _afterGap();
-    },900);
+      S.drawnCard=null; hide($('drawn-slot'));
+      const target=$('my-hand').querySelectorAll('.card-3d')[visualIdx]?.getBoundingClientRect()||slotRect;
+      if(!drawnRect){ S._animSlot=null; renderMyHand(); return; }
+      flyGhost(drawnRect, target, { faceUp:true, card:drawnData, dur:440, z:9998, onLand:(g)=>{
+        setTimeout(()=>ghostFlipDown(g, ()=>{ g?.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.2); }), 430);
+      }});
+    },250);
     return;
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
     SFX.play('Card');
-    const _crf2=cardEl.getBoundingClientRect();
-    const _dpf2=$('discard-pile')?.getBoundingClientRect();
-    const _dkf2=$('deck-pile')?.getBoundingClientRect();
-    const _cs2=getComputedStyle(document.documentElement);
-    const _cw2=parseInt(_cs2.getPropertyValue('--cw'))||66;
-    const _ch2=parseInt(_cs2.getPropertyValue('--ch'))||100;
-    // Ghost IMMEDIATELY flies to pile
+    // Server also replaces IN PLACE here (replaceSlot=serverIdx). handOrder unchanged.
+    const slotRect=cardEl.getBoundingClientRect();
+    const pileRect=$('discard-pile')?.getBoundingClientRect();
+    const deckRect=$('deck-pile')?.getBoundingClientRect();
+
     S._skipDiscard=true;
-    const _fg=document.createElement('div');
-    _fg.className='card-3d card-back';
-    _fg.style.cssText='position:fixed;left:'+_crf2.left+'px;top:'+_crf2.top+'px;width:'+_crf2.width+'px;height:'+_crf2.height+'px;z-index:9999;pointer-events:none;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.65);transition:none';
-    document.body.appendChild(_fg);
-    S._selfDiscardGhost=_fg;
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      if(!_dpf2)return;
-      _fg.style.transition='left 500ms cubic-bezier(.25,.46,.45,.94),top 500ms cubic-bezier(.25,.46,.45,.94),width 500ms,height 500ms';
-      _fg.style.left=(_dpf2.left+_dpf2.width/2-_cw2/2)+'px';
-      _fg.style.top=(_dpf2.top+_dpf2.height/2-_ch2/2)+'px';
-      _fg.style.width=_cw2+'px'; _fg.style.height=_ch2+'px';
-    }));
-    setTimeout(()=>{
-      _fg.remove(); S._skipDiscard=false;
-      const c=S._pendingDiscardCard||S.gameState?.discardTop;
-      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
-    },560);
-    // Gap and handOrder
-    S.handOrder=null;
-    S._gapSlotVI=visualIdx; S._gapClosing=false;
+    S._animSlot=visualIdx;
     renderMyHand();
     socket.emit('game:forced-discard',{handIndex:serverIdx});
+    S._selIdx=-1;
+
+    // Ghost A — discarded card flies to pile
+    const gA=flyGhost(slotRect, pileRect, { dur:460, z:9999, onLand:(g)=>{
+      const c=S._pendingDiscardCard||S.gameState?.discardTop;
+      S._pendingDiscardCard=null; g?.remove(); S._skipDiscard=false;
+      if(c) renderDiscardPile(c);
+    }});
+    S._selfDiscardGhost=gA;
+
+    // Ghost B — replacement flies face-down from the DECK into the same slot.
+    // The face-up "peek" of the replacement is handled by game:forced-draw-reveal.
     setTimeout(()=>{
-      S._gapClosing=true;
-      const _g2=document.getElementById('hand-gap');
-      const _af2=()=>{
-        S._gapSlotVI=null; S._gapClosing=false;
-        // Replacement card flies from deck to last hand slot
-        const _cc=$('my-hand').querySelectorAll('.card-3d');
-        const _le=_cc[_cc.length-1];
-        if(_dkf2 && _le){
-          const _tr=_le.getBoundingClientRect();
-          const _rg=document.createElement('div');
-          _rg.className='card-3d card-back';
-          _rg.style.cssText='position:fixed;left:'+(_dkf2.left+_dkf2.width/2-_cw2/2)+'px;top:'+(_dkf2.top+_dkf2.height/2-_ch2/2)+'px;width:'+_cw2+'px;height:'+_ch2+'px;z-index:9998;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
-          document.body.appendChild(_rg);
-          requestAnimationFrame(()=>requestAnimationFrame(()=>{
-            _rg.style.transition='left 440ms cubic-bezier(.25,.46,.45,.94),top 440ms cubic-bezier(.25,.46,.45,.94),width 440ms,height 440ms';
-            _rg.style.left=(_tr.left+_tr.width/2-_cw2/2)+'px';
-            _rg.style.top=(_tr.top+_tr.height/2-_ch2/2)+'px';
-            _rg.style.width=_cw2+'px'; _rg.style.height=_ch2+'px';
-          }));
-          setTimeout(()=>{_rg.remove();renderMyHand();SFX.play('Card',0.2);},480);
-        } else renderMyHand();
-      };
-      if(_g2){_g2.classList.add('gap-closing');setTimeout(_af2,300);}
-      else _af2();
-    },900);
+      const target=$('my-hand').querySelectorAll('.card-3d')[visualIdx]?.getBoundingClientRect()||slotRect;
+      if(!deckRect){ S._animSlot=null; renderMyHand(); return; }
+      flyGhost(deckRect, target, { dur:460, z:9998, onLand:(g)=>{ g?.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.2); }});
+    },250);
     return;
   }
 
@@ -829,6 +753,56 @@ function discardDrawn() {
   S.drawnCard=null;S._selIdx=-1;hide($('drawn-slot'));
 }
 
+// ── Unified ghost flight ──────────────────────────────────────────────────
+// Creates a floating card at `from` rect and flies it to `to` rect, optionally
+// resizing to match the destination. The ghost is ALWAYS visible the whole way.
+// opts: {card, faceUp, toW, toH, dur, z, onLand}
+function flyGhost(from, to, opts={}){
+  if(!from||!to){ opts.onLand?.(null); return null; }
+  const cs=getComputedStyle(document.documentElement);
+  const CW=parseInt(cs.getPropertyValue('--cw'))||66, CH=parseInt(cs.getPropertyValue('--ch'))||100;
+  const dur=opts.dur??450;
+  const toW=opts.toW??CW, toH=opts.toH??CH;
+  const g=document.createElement('div');
+  g.className='card-3d '+(opts.faceUp&&opts.card?'card-front':'card-back');
+  if(opts.faceUp&&opts.card){ g.style.background='#f5f0e8'; g.innerHTML=`<img src="/cards/${opts.card.suit}_${opts.card.value}.jpg" class="card-img">`; }
+  g.style.position='fixed'; g.style.left=from.left+'px'; g.style.top=from.top+'px';
+  g.style.width=from.width+'px'; g.style.height=from.height+'px';
+  g.style.zIndex=String(opts.z??9990); g.style.margin='0'; g.style.pointerEvents='none';
+  g.style.overflow='hidden'; g.style.borderRadius='6px';
+  g.style.boxShadow='0 8px 24px rgba(0,0,0,.6)'; g.style.transition='none';
+  document.body.appendChild(g);
+  const tx=to.left+to.width/2-toW/2, ty=to.top+to.height/2-toH/2;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const e='cubic-bezier(.25,.46,.45,.94)';
+    g.style.transition=`left ${dur}ms ${e},top ${dur}ms ${e},width ${dur}ms ${e},height ${dur}ms ${e}`;
+    g.style.left=tx+'px'; g.style.top=ty+'px'; g.style.width=toW+'px'; g.style.height=toH+'px';
+  }));
+  setTimeout(()=>opts.onLand?.(g), dur+25);
+  return g;
+}
+// Flip a ghost from face-up to face-down in place (scaleX); then onDone
+function ghostFlipDown(g,onDone){
+  if(!g){onDone?.();return;}
+  g.style.transition='transform .15s ease-in'; g.style.transform='scaleX(0)';
+  setTimeout(()=>{
+    g.className='card-3d card-back'; g.innerHTML=''; g.style.background='';
+    g.style.transition='transform .15s ease-out'; g.style.transform='scaleX(1)';
+    setTimeout(()=>onDone?.(),160);
+  },160);
+}
+// Flip a ghost from face-down to face-up in place (scaleX), revealing `card`; then onDone
+function ghostFlipUp(g,card,onDone){
+  if(!g){onDone?.();return;}
+  g.style.transition='transform .15s ease-in'; g.style.transform='scaleX(0)';
+  setTimeout(()=>{
+    g.className='card-3d card-front'; g.style.background='#f5f0e8';
+    g.innerHTML=`<img src="/cards/${card.suit}_${card.value}.jpg" class="card-img">`;
+    g.style.transition='transform .15s ease-out'; g.style.transform='scaleX(1)';
+    setTimeout(()=>onDone?.(),160);
+  },160);
+}
+
 // ── flyAnim: reparent the actual element to body, animate it to destination ──
 function flyAnim(fromEl, toEl) {
   if(!fromEl||!toEl)return;
@@ -865,27 +839,16 @@ function flyAnim(fromEl, toEl) {
   },680);
   }catch(e){ S._skipDiscard=false; try{fromEl.remove();}catch(_){} }
 }
-// Deck draw animation: full-sized card flies from deck to drawn-slot, then disappears
-// as the actual drawn card is revealed. onArrive fires when ghost reaches destination.
-function animDeckDraw(onArrive) {
-  const dk=$('deck-pile'); if(!dk){onArrive?.();return;}
-  const fr=dk.getBoundingClientRect();
-  const slot=$('drawn-slot');
-  const tr=slot?.getBoundingClientRect();
-  if(!tr||tr.width<4){onArrive?.();return;} // slot not rendered yet, skip
-  const st=getComputedStyle(document.documentElement);
-  const cw=parseInt(st.getPropertyValue('--cw'))||66;
-  const ch=parseInt(st.getPropertyValue('--ch'))||100;
-  const f=document.createElement('div');
-  f.className='card-3d card-back';
-  f.style.cssText=`position:fixed;left:${fr.left+fr.width/2-cw/2}px;top:${fr.top+fr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9995;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55)`;
-  document.body.appendChild(f);
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    f.style.transition='left .45s cubic-bezier(.25,.46,.45,.94),top .45s cubic-bezier(.25,.46,.45,.94)';
-    f.style.left=`${tr.left+tr.width/2-cw/2}px`;
-    f.style.top=`${tr.top+tr.height/2-ch/2}px`;
-  }));
-  setTimeout(()=>{ f.remove(); onArrive?.(); },500);
+// Deck draw: a face-down card flies from the deck to the drawn-slot, then flips
+// face-up to reveal the card you drew. `card` null = penalized (stays face-down).
+function animDeckDraw(card, onArrive) {
+  const dk=$('deck-pile'); const slot=$('drawn-slot');
+  const fr=dk?.getBoundingClientRect(); const tr=slot?.getBoundingClientRect();
+  if(!fr||!tr||tr.width<4){ onArrive?.(); return; }
+  flyGhost(fr, tr, { dur:430, z:9995, onLand:(g)=>{
+    if(card){ ghostFlipUp(g, card, ()=>{ onArrive?.(); g?.remove(); }); }
+    else { onArrive?.(); g?.remove(); }
+  }});
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
@@ -923,11 +886,12 @@ socket.on('game:drawn-card',({card,penalized})=>{
   }
   SFX.play('Card', 0.55);
   renderMyHand();renderActions();renderTurnBanner();
-  // Hide drawn card content, then reveal it once the deck-fly ghost arrives
+  // Keep the real drawn-slot content hidden until the flying card flips up onto it
   const _dcd=$('drawn-card-display');
   if(_dcd) _dcd.style.opacity='0';
-  requestAnimationFrame(()=>animDeckDraw(()=>{
-    if(_dcd){ _dcd.style.transition='opacity .18s'; _dcd.style.opacity='1'; }
+  const reveal = (penalized||!card) ? null : card;
+  requestAnimationFrame(()=>animDeckDraw(reveal,()=>{
+    if(_dcd){ _dcd.style.transition='opacity .12s'; _dcd.style.opacity='1'; }
   }));
 });
 
@@ -1038,9 +1002,9 @@ $('btn-special-skip').addEventListener('click',()=>{
 // ── Peek reveal (card 9) ───────────────────────────────────────────────────
 // Briefly show the replacement card drawn during forced-discard (10-card effect)
 socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
-  SFX.play('Card',0.3);
-  // Wait for game:state + game:private to arrive and initialize handOrder
+  // Wait until the replacement ghost has flown into the slot and _animSlot cleared
   setTimeout(()=>{
+    SFX.play('Card',0.3);
     if(!S.handOrder) S.handOrder=Array.from({length:S.gameState?.players.find(p=>String(p.userId)===String(S.userId))?.cardCount??4},(_,i)=>i);
     if(S.privateState?.hand?.[serverIndex]) S.privateState.hand[serverIndex]={...card,known:true,index:serverIndex};
     S._tempRevealServerIdx=serverIndex;
@@ -1057,7 +1021,7 @@ socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
       },2800);
     }
     addLog(`🔟 Hai pescato: ${card.label}${card.symbol} — ricordala!`,'gold');
-  },350);
+  },820);
 });
 
 socket.on('game:peeked',({cardIndex,card})=>{
@@ -1414,60 +1378,28 @@ const SFX = {
 
 // ── Opponent animation helpers ────────────────────────────────────────────
 
-// Find an opponent's seat element by userId
-function getSeatEl(userId) {
-  return document.querySelector(`[data-user-id="${userId}"]`) ||
-         document.querySelector(`.seat[data-user-id="${userId}"]`);
-}
-
-// Ghost card flying from A to B (face-down back)
-// mini=true uses opponent mini-card size instead of full hand-card size
-function ghostFly(fromRect, toRect, durationMs=600, mini=false, onDone) {
-  if (!fromRect||!toRect) return;
-  const st = getComputedStyle(document.documentElement);
-  const cw = mini ? 34 : (parseInt(st.getPropertyValue('--cw'))||68);
-  const ch = mini ? 52 : (parseInt(st.getPropertyValue('--ch'))||104);
-  const g = document.createElement('div');
-  g.className = 'card-3d card-back';
-  g.style.cssText = [
-    `position:fixed`,
-    `left:${fromRect.left+fromRect.width/2-cw/2}px`,
-    `top:${fromRect.top+fromRect.height/2-ch/2}px`,
-    `width:${cw}px`, `height:${ch}px`,
-    `z-index:9990`, `pointer-events:none`,
-    `box-shadow:0 6px 20px rgba(0,0,0,.65)`,
-    `transition:none`
-  ].join(';');
-  document.body.appendChild(g);
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    // Move to destination — no fade/scale so card stays fully visible the whole flight
-    g.style.transition=`left ${durationMs}ms cubic-bezier(.25,.46,.45,.94), top ${durationMs}ms cubic-bezier(.25,.46,.45,.94)`;
-    g.style.left=`${toRect.left+toRect.width/2-cw/2}px`;
-    g.style.top =`${toRect.top+toRect.height/2-ch/2}px`;
-  }));
-  setTimeout(()=>{ g.remove(); onDone?.(); }, durationMs+80);
-}
-
-// Opponent draws: deck → their seat (mini ghost)
+// Opponent draws: a full-size card flies from the deck to their seat, shrinking to
+// mini size. The destination mini-card stays hidden until the ghost lands (no pre-pop).
 function animOppDraw(userId) {
   const dk=$('deck-pile');
-  const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
-  if (!dk||!seat) return;
+  if (!dk){ S._drawingSet?.delete(userId); return; }
   SFX.play('Card', 0.35);
-  const fr=dk.getBoundingClientRect(), tr=seat.getBoundingClientRect();
-  const st=getComputedStyle(document.documentElement);
-  const cw=parseInt(st.getPropertyValue('--cw'))||66, ch=parseInt(st.getPropertyValue('--ch'))||100;
-  const mw=28, mh=43;
-  const g=document.createElement('div');
-  g.className='card-3d card-back';
-  g.style.cssText='position:fixed;left:'+(fr.left+fr.width/2-cw/2)+'px;top:'+(fr.top+fr.height/2-ch/2)+'px;width:'+cw+'px;height:'+ch+'px;z-index:9990;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none';
-  document.body.appendChild(g);
+  const fr=dk.getBoundingClientRect();
+  // Launch AFTER renderSeats has run (checkOppCardChanges runs before renderBoard),
+  // so the reserved 'mini-incoming' slot exists and we can target it precisely.
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    g.style.transition='left 520ms cubic-bezier(.25,.46,.45,.94),top 520ms cubic-bezier(.25,.46,.45,.94),width 520ms cubic-bezier(.25,.46,.45,.94),height 520ms cubic-bezier(.25,.46,.45,.94)';
-    g.style.left=(tr.left+tr.width/2-mw/2)+'px'; g.style.top=(tr.top+tr.height/2-mh/2)+'px';
-    g.style.width=mw+'px'; g.style.height=mh+'px';
+    const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
+    if(!seat){ S._drawingSet?.delete(userId); return; }
+    const tgt=seat.querySelector('.mini-card.mini-incoming')||seat.querySelector('.seat-cards')||seat;
+    const tr=tgt.getBoundingClientRect();
+    flyGhost(fr, tr, { toW:28, toH:43, dur:500, z:9990, onLand:(g)=>{
+      g?.remove();
+      S._drawingSet?.delete(userId);
+      const s=document.querySelector('.seat[data-user-id="'+userId+'"]');
+      const mc=s?.querySelector('.mini-card.mini-incoming');
+      if(mc){ mc.classList.remove('mini-incoming'); mc.classList.add('card-new-pop'); }
+    }});
   }));
-  setTimeout(()=>g.remove(), 620);
 }
 
 // Opponent discards: flip face-up at seat, scale up to pile size
@@ -1504,10 +1436,10 @@ const _prevCounts = {};
 function checkOppCardChanges(newState) {
   if (!newState?.players) return;
   newState.players.forEach(p => {
-    if (p.userId === S.userId) { _prevCounts[p.userId]=p.cardCount; return; }
+    if (String(p.userId) === String(S.userId)) { _prevCounts[p.userId]=p.cardCount; return; }
     const prev = _prevCounts[p.userId];
     if (prev !== undefined && p.cardCount > prev) {
-      S._justDrewSet=S._justDrewSet||new Set(); S._justDrewSet.add(p.userId);
+      S._drawingSet=S._drawingSet||new Set(); S._drawingSet.add(p.userId);
       animOppDraw(p.userId);
     }
     _prevCounts[p.userId] = p.cardCount;
