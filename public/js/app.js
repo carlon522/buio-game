@@ -411,20 +411,13 @@ function renderTurnBanner() {
   function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; show(bar); }
 
   if(S._attackMode){ setBar('attack-time','⚔ Clicca la carta da usare!');return; }
-  if(phase==='scoring'){ setBar('other-turn','📊 Fine Round — Punteggi');return; }
-  if(phase==='special'){
-    setBar(isMe?'my-turn':'other-turn', isMe?'✨ Completa l\'azione speciale':`✨ ${cur?.username||'...'} sta completando carta speciale`);return;
-  }
-  if(phase==='forced-discard'){
-    setBar(isMe?'attack-time':'other-turn', isMe?'🔟 Devi scartare PRIMA di pescare!':`🔟 ${cur?.username||'...'} deve scartare prima di pescare`);return;
-  }
+  if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Devi scartare PRIMA di pescare!');return; }
   if(isMe){
-    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Tuo Turno — Ultimo Giro! — clicca il mazzo':'⭐ Il Tuo Turno! — clicca il mazzo per pescare');
+    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Tuo Turno — Ultimo Giro!':'⭐ Il Tuo Turno!');
     else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta — ${d.label}${d.symbol} (${d.value}pt)`:'Tieni la pescata o scartala');}
     else setBar('my-turn','⭐ Il Tuo Turno!');
   } else {
-    const sub=phase==='draw'?'sta pescando…':phase==='discard'?'sta scegliendo…':'';
-    setBar('other-turn',`Turno di ${cur?.username||'…'}${sub?' — '+sub:''}`);
+    hide(bar);
   }
 }
 
@@ -593,7 +586,7 @@ function onHandClick(visualIdx) {
     return;
   }
 
-  if(phase==='discard'&&isMe&&S.drawnCard){
+  if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
     // Clicked card goes to discard pile
     flyAnim(cardEl,$('discard-pile'));
     SFX.play('Card');
@@ -640,7 +633,7 @@ function onHandClick(visualIdx) {
     return;
   }
 
-  if(phase==='forced-discard'&&isMe){
+  if(phase==='forced-discard'&&isMe&&!S._attackMode){
     flyAnim(cardEl,$('discard-pile'));
     socket.emit('game:forced-discard',{handIndex:serverIdx});
     return;
