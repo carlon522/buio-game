@@ -168,7 +168,7 @@ input,select{font-family:inherit}
 
 /* ── FACE-UP (front with image) ──────────────────────────────────────────── */
 .card-front{
-  background:#fff;
+  background:#f5f0e8;
   border:1px solid rgba(0,0,0,.12);
 }
 .card-front img.card-img{
@@ -413,7 +413,7 @@ input,select{font-family:inherit}
   display:flex;align-items:center;justify-content:center;
   overflow:hidden;background:rgba(0,0,0,.22);position:relative;
 }
-.discard-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff}
+.discard-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f0e8}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 

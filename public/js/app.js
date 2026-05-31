@@ -233,7 +233,11 @@ socket.on('game:state',state=>{
 });
 socket.on('game:private',priv=>{
   S.privateState=priv;
-  renderMyHand();renderScore();renderActions();
+  // Always sync drawn card from authoritative server state.
+  // priv.drawnCard is non-null only when you are current player with a drawn card.
+  // This restores the drawn card if an attack interrupted the discard phase.
+  if(!S._animSlot) S.drawnCard = priv?.drawnCard || null;
+  renderMyHand();renderScore();renderActions();renderTurnBanner();
   priv?.penalized?show($('penalized-pill')):hide($('penalized-pill'));
 });
 socket.on('game:turn-start',({userId,username})=>{
@@ -627,7 +631,7 @@ function onHandClick(visualIdx) {
       const ch=parseInt(st.getPropertyValue('--ch'))||100;
       const fly=document.createElement('div');
       fly.className='card-3d card-front';
-      fly.style.cssText=`position:fixed;left:${fr.left+fr.width/2-cw/2}px;top:${fr.top+fr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9999;margin:0;border-radius:6px;overflow:hidden;box-shadow:2px 5px 14px rgba(0,0,0,.55)`;
+      fly.style.cssText=`position:fixed;left:${fr.left+fr.width/2-cw/2}px;top:${fr.top+fr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9999;margin:0;border-radius:6px;overflow:hidden;box-shadow:2px 5px 14px rgba(0,0,0,.55);background:#f5f0e8`;
       fly.innerHTML=`<img src="/cards/${S.drawnCard.suit}_${S.drawnCard.value}.jpg" class="card-img">`;
       document.body.appendChild(fly);
       requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -952,7 +956,8 @@ socket.on('game:card-discarded',({card, discarderId})=>{
 socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
   S._attackAnnouncer=null;
   S._attackRevealActive=true;
-  S.drawnCard=null; // clear stale drawn card so discard branch doesn't misfire on resume
+  // Don't clear S.drawnCard here — if this player was in discard phase,
+  // game:private will restore it so they can finish their turn after the attack
   clearInterval(S._annCdInt);
   hide($('attack-announce-bar'));
   renderActions();
@@ -1191,7 +1196,7 @@ socket.on('game:scoring',({scores,losers,knockedBy})=>{
   else hide(ki);
   $('scoring-list').innerHTML=[...scores].sort((a,b)=>a.score-b.score).map(s=>{
     const isL=losers.includes(s.userId),pl=gs?.players.find(p=>p.userId===s.userId);
-    const hh=(s.hand||[]).map(c=>`<div style="width:30px;height:46px;border-radius:4px;overflow:hidden;box-shadow:1px 2px 5px rgba(0,0,0,.4);flex-shrink:0;background:#fff"><img src="/cards/${c.suit}_${c.value}.jpg" style="width:100%;height:100%;object-fit:contain;display:block" onerror="this.style.display='none'"></div>`).join('');
+    const hh=(s.hand||[]).map(c=>`<div style="width:30px;height:46px;border-radius:4px;overflow:hidden;box-shadow:1px 2px 5px rgba(0,0,0,.4);flex-shrink:0;background:#f5f0e8"><img src="/cards/${c.suit}_${c.value}.jpg" style="width:100%;height:100%;object-fit:contain;display:block" onerror="this.style.display='none'"></div>`).join('');
     return `<div class="score-row${isL?' loser':''}"><div class="score-meta"><div class="score-name">${esc(s.username)}${isL?' 💔':' ✅'}${knockedBy===s.userId?' ✊':''}</div><div class="score-lives">❤ ${pl?.lives??'?'} vite</div><div class="score-hand-row">${hh}</div></div><div class="score-val">${s.score}</div></div>`;
   }).join('');
   const isHost=gs?.hostUserId===S.userId;
