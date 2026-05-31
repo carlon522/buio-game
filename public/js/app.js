@@ -410,12 +410,12 @@ function renderTurnBanner() {
 
   function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; show(bar); }
 
-  if(S._attackMode){ setBar('attack-time','⚔ Clicca la carta da usare!');return; }
-  if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Devi scartare PRIMA di pescare!');return; }
+  if(S._attackMode){ setBar('attack-time','⚔ Scegli carta!');return; }
+  if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Scarta prima!');return; }
   if(isMe){
-    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Tuo Turno — Ultimo Giro!':'⭐ Il Tuo Turno!');
-    else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta — ${d.label}${d.symbol} (${d.value}pt)`:'Tieni la pescata o scartala');}
-    else setBar('my-turn','⭐ Il Tuo Turno!');
+    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Turno tuo — ultimo!':'Turno tuo!');
+    else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta ${d.label}${d.symbol} (${d.value}pt)`:'Tieni o scarta?');}
+    else setBar('my-turn','Turno tuo!');
   } else {
     hide(bar);
   }
@@ -563,7 +563,7 @@ function renderActions() {
     show($('btn-attack'));
   }
   if(S._attackMode){
-    hint.textContent='⚔ Clicca una carta — puoi attaccare più volte!';
+    hint.textContent='⚔ Scegli carta da attaccare';
   }
 }
 
@@ -935,9 +935,11 @@ socket.on('game:card-discarded',({card, discarderId})=>{
 
 // ── Attack reveal ─────────────────────────────────────────────────────────
 socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
-  S._attackAnnouncer=null; // announce phase over
-  S._attackRevealActive = true;   // PAUSE all game interactions for reveal
-  renderActions();                 // immediately hide buttons
+  S._attackAnnouncer=null;
+  S._attackRevealActive=true;
+  clearInterval(S._annCdInt);
+  hide($('attack-announce-bar'));
+  renderActions();
 
   setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 3200);
   showAttackReveal(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard);
@@ -1120,7 +1122,7 @@ socket.on('game:swap-reveal', ({initiatorUserId, initiatorUsername, targetUserId
 });
 
 // attack-window-closed / attack-cancelled — safety reset, unblock game
-socket.on('game:attack-window-closed',()=>{ S._attackRevealActive=false;S._attackMode=false;S._attackAnnouncer=null; renderMyHand();renderActions();renderTurnBanner(); });
+socket.on('game:attack-window-closed',()=>{ S._attackRevealActive=false;S._attackMode=false;S._attackAnnouncer=null;clearInterval(S._annCdInt);hide($('attack-announce-bar')); renderMyHand();renderActions();renderTurnBanner(); });
 socket.on('game:attack-cancelled',({username,penalty})=>{ S._attackRevealActive=false;S._attackMode=false;S._attackAnnouncer=null; const bar=$('attack-announce-bar');if(bar)bar.classList.add('hidden'); if(penalty){SFX.play('Fail',0.85);addLog(`⏰ ${username} non ha attaccato in tempo — carta di penalità!`);} renderMyHand();renderActions();renderTurnBanner(); });
 
 // ── Attack announcement — shown to ALL players when ⚔ is pressed ─────────
@@ -1140,8 +1142,8 @@ socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCar
     cardEl.innerHTML=`<div class="card-3d card-front" style="width:40px;height:61px;pointer-events:none"><img src="/cards/${discardCard.suit}_${discardCard.value}.jpg" class="card-img" onerror="this.style.display='none';makeFB(this.parentElement,'${discardCard.label}','${discardCard.symbol}','${fb}')"></div>`;
   }
 
-  $('ann-title').textContent = isAttacker ? '⚔ Seleziona la carta da usare!' : `⚔ ${esc(attackerUsername)} vuole attaccare!`;
-  $('ann-sub').textContent   = isAttacker ? 'Tocca una tua carta…' : 'Sta scegliendo la carta…';
+  $('ann-title').textContent = isAttacker ? '⚔ Scegli carta!' : `⚔ ${esc(attackerUsername)} attacca!`;
+  $('ann-sub').textContent   = isAttacker ? 'Tocca una carta…' : '';
 
   // Progress bar
   const prog=$('ann-progress');
