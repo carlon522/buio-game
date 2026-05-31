@@ -207,7 +207,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; }
+  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._gapSlotVI=null;S._gapClosing=false; }
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
@@ -423,9 +423,9 @@ function renderTurnBanner() {
   if(S._attackMode){ setBar('attack-time','⚔ Scegli carta!');return; }
   if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Scarta prima!');return; }
   if(isMe){
-    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Turno tuo — ultimo!':'Turno tuo!');
+    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Giochi te — ultimo!':'Giochi te!');
     else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta ${d.label}${d.symbol} (${d.value}pt)`:'Tieni o scarta?');}
-    else setBar('my-turn','Turno tuo!');
+    else setBar('my-turn','Giochi te!');
   } else {
     hide(bar);
   }
@@ -511,6 +511,15 @@ function renderMyHand() {
     return `<div class="card-3d card-back ${cls}"${raiseAttr}${hiddenAttr} data-index="${visualIdx}"></div>`;
   }).join('');
 
+  // Re-inject gap hole at the correct visual position after every innerHTML rebuild
+  if(S._gapSlotVI !== null && !S._gapClosing){
+    const _gc = handEl.querySelectorAll('.card-3d');
+    const _gp = document.createElement('div');
+    _gp.className = 'card-gap-hole'; _gp.id = 'hand-gap';
+    if(S._gapSlotVI < _gc.length) handEl.insertBefore(_gp, _gc[S._gapSlotVI]);
+    else handEl.appendChild(_gp);
+  }
+
   handEl.querySelectorAll('.card-3d').forEach((el,vi)=>{
     el.addEventListener('click',()=>onHandClick(vi));
     // Drag-to-reorder
@@ -534,7 +543,7 @@ function renderMyHand() {
   if(S.drawnCard&&isMe){
     show(slot);
     $('drawn-card-display').innerHTML=cardHTML(S.drawnCard,{cls:'clickable anim-appear',index:-1});
-    $('drawn-card-display').querySelector('.card-3d')?.addEventListener('click',()=>{ if(phase==='discard'&&isMe) discardDrawn(); });
+    $('drawn-card-display').querySelector('.card-3d')?.addEventListener('click',()=>{ if(phase==='discard'&&isMe&&!S._attackMode) discardDrawn(); });
   } else hide(slot);
 
   // Update overflow arrow after hand renders
@@ -566,7 +575,7 @@ function renderActions() {
   if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
 
   if(phase==='draw'&&isMe){ show($('btn-draw'));show($('btn-knock')); }
-  if(phase==='discard'&&isMe&&S.drawnCard){ show($('btn-discard-drawn')); }
+  if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){ show($('btn-discard-drawn')); }
   if(phase==='forced-discard'&&isMe){
     hint.textContent='⚠ Effetto 10 — Scegli una carta da scartare PRIMA di pescare!';
   }
@@ -604,55 +613,54 @@ function onHandClick(visualIdx) {
   }
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
-    // Clicked card goes to discard pile
+    // Card flies to discard pile
     flyAnim(cardEl,$('discard-pile'));
     SFX.play('Card');
 
-    // Update visual order: remove clicked position, drawn card goes to the RIGHT END
+    // Update handOrder immediately so server indices stay correct:
+    // drawn card takes the last visual slot (face-down, hidden until gap closes)
     const lastVI = S.handOrder.length - 1;
     const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
-    newOrder.push(serverIdx); // drawn card's server-index at last visual slot
+    newOrder.push(serverIdx);
     S.handOrder = newOrder;
     if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
 
-    // Mark last slot as animating so every renderMyHand keeps it hidden
+    // Show gap where the card was; keep drawn-card slot hidden until gap closes
     S._animSlot = lastVI;
-    renderMyHand(); // hand renders with last slot invisible
-
-    // Create face-up ghost at drawn-slot position, animate it to the last slot
-    const slotEl=$('drawn-slot');
-    const lastEl=$('my-hand').querySelectorAll('.card-3d')[lastVI];
-    if(slotEl&&lastEl&&S.drawnCard?.suit){
-      const fr=slotEl.getBoundingClientRect();
-      const tr=lastEl.getBoundingClientRect();
-      // Use explicit CSS-var dimensions — not getBoundingClientRect (avoids size bugs)
-      const st=getComputedStyle(document.documentElement);
-      const cw=parseInt(st.getPropertyValue('--cw'))||66;
-      const ch=parseInt(st.getPropertyValue('--ch'))||100;
-      const fly=document.createElement('div');
-      fly.className='card-3d card-front';
-      fly.style.cssText=`position:fixed;left:${fr.left+fr.width/2-cw/2}px;top:${fr.top+fr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:9999;margin:0;border-radius:6px;overflow:hidden;box-shadow:2px 5px 14px rgba(0,0,0,.55);background:#f5f0e8`;
-      fly.innerHTML=`<img src="/cards/${S.drawnCard.suit}_${S.drawnCard.value}.jpg" class="card-img">`;
-      document.body.appendChild(fly);
-      requestAnimationFrame(()=>requestAnimationFrame(()=>{
-        fly.style.transition='left .5s ease-out,top .5s ease-out';
-        fly.style.left=tr.left+'px'; fly.style.top=tr.top+'px';
-      }));
-      // Flip to face-down as it lands
-      setTimeout(()=>{ fly.className='card-3d card-back'; fly.innerHTML=''; },370);
-      setTimeout(()=>{ fly.remove(); S._animSlot=null; renderMyHand(); },640);
-    } else {
-      S._animSlot=null; renderMyHand();
-    }
+    S._gapSlotVI = visualIdx;
+    S._gapClosing = false;
+    renderMyHand();
 
     socket.emit('game:discard',{handIndex:serverIdx});
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
+
+    // After 1.8s: collapse gap, cards shift left, drawn card slot reveals face-down
+    setTimeout(()=>{
+      S._gapClosing=true;
+      const gap=document.getElementById('hand-gap');
+      const finish=()=>{ S._gapSlotVI=null; S._gapClosing=false; S._animSlot=null; renderMyHand(); };
+      if(gap){ gap.classList.add('gap-closing'); setTimeout(finish,380); }
+      else finish();
+    },1800);
     return;
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
     flyAnim(cardEl,$('discard-pile'));
+    SFX.play('Card');
+    // Reset handOrder — server removes this card and appends a new one at end
+    S.handOrder=null;
+    S._gapSlotVI=visualIdx;
+    S._gapClosing=false;
+    renderMyHand();
     socket.emit('game:forced-discard',{handIndex:serverIdx});
+    setTimeout(()=>{
+      S._gapClosing=true;
+      const gap=document.getElementById('hand-gap');
+      const finish=()=>{ S._gapSlotVI=null; S._gapClosing=false; renderMyHand(); };
+      if(gap){ gap.classList.add('gap-closing'); setTimeout(finish,380); }
+      else finish();
+    },1800);
     return;
   }
 

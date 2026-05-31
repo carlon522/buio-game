@@ -369,6 +369,18 @@ input,select{font-family:inherit}
 .seat-turn-badge{font-size:.58rem;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .seat-elim-badge{font-size:.75rem}
 
+/* ── Card gap hole (after discarding from hand) ──────────────────────────── */
+.card-gap-hole{
+  width:var(--cw);height:var(--ch);flex-shrink:0;
+  border:1.5px dashed rgba(196,133,59,.22);
+  border-radius:var(--cr);
+  background:rgba(0,0,0,.07);
+  transition:width .35s ease-in-out,opacity .25s ease-in-out,margin .35s ease-in-out,border-color .2s;
+}
+.card-gap-hole.gap-closing{
+  width:0;opacity:0;margin:0!important;border-color:transparent;overflow:hidden;
+}
+
 /* ── Spectator (local player eliminated) ─────────────────────────────────── */
 .spectator-msg{
   display:flex;align-items:center;justify-content:center;
