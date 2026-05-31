@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0e0800">
 <title>BUIO – Gioco di Carte</title>
-<link rel="stylesheet" href="/css/style.css?v=36">
+<link rel="stylesheet" href="/css/style.css?v=37">
 </head>
 <body>
 
@@ -150,7 +150,7 @@
       <button id="mute-btn" class="mute-btn" title="Muto/Suono (M)" onclick="SFX.toggle()">🔊</button>
     </div>
 
-    <!-- Attack bars (between banner and table) -->
+    <!-- Attack bars: position:absolute so they never shift table layout -->
     <div id="attack-window" class="attack-bar hidden">
       <div id="atk-disc-inline" class="atk-disc-inline"></div>
       <div class="atk-mid">
@@ -248,10 +248,10 @@
       </div>
 
       <div id="action-bar" class="action-bar">
-        <button id="btn-draw"          class="btn-action btn-draw hidden">🂠 Pesca</button>
-        <button id="btn-knock"         class="btn-action btn-knock hidden">✊ Busso</button>
-        <button id="btn-attack"        class="btn-action btn-attack hidden">⚔ Attacca!</button>
-        <button id="btn-discard-drawn" class="btn-action btn-disc hidden">↓ Scarta</button>
+        <button id="btn-draw"          class="btn-action btn-draw"  disabled>🂠 Pesca</button>
+        <button id="btn-knock"         class="btn-action btn-knock" disabled>✊ Busso</button>
+        <button id="btn-attack"        class="btn-action btn-attack" disabled>⚔ Attacca!</button>
+        <button id="btn-discard-drawn" class="btn-action btn-disc"  disabled>↓ Scarta</button>
         <div id="action-hint" class="action-hint"></div>
       </div>
     </div>
@@ -289,6 +289,6 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="/js/app.js?v=36"></script>
+<script src="/js/app.js?v=37"></script>
 </body>
 </html>

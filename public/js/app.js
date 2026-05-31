@@ -569,29 +569,20 @@ function renderScore() {
 function renderActions() {
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const hint=$('action-hint');
-  hide($('btn-draw'));hide($('btn-knock'));hide($('btn-attack'));hide($('btn-discard-drawn'));
+  // Always grey out all buttons — enable only what's valid right now
+  const en=id=>{ const e=$(id);if(e)e.disabled=false; };
+  const dis=id=>{ const e=$(id);if(e)e.disabled=true; };
+  dis('btn-draw');dis('btn-knock');dis('btn-attack');dis('btn-discard-drawn');
   hint.textContent='';
+
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
-  if(myPlayer?.isEliminated){ return; }
-  // All actions frozen during attack reveal overlay
+  if(myPlayer?.isEliminated) return;
   if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
 
-  if(phase==='draw'&&isMe){ show($('btn-draw'));show($('btn-knock')); }
-  if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){ show($('btn-discard-drawn')); }
-  if(phase==='forced-discard'&&isMe){
-    // hint suppressed — turn bar shows 🔟 Scarta prima!
-  }
-  if(phase==='special'&&isMe){
-    hint.textContent='Scegli l\'azione per la carta speciale';
-  }
-  // ⚔ available any time during active phases when there's a discard top
-  // Show ⚔ only if: active phase, discard exists, not already in attack mode, no one else announcing
-  if(['draw','discard','forced-discard'].includes(phase) && gs?.discardTop && !S._attackMode && !S._attackAnnouncer){
-    show($('btn-attack'));
-  }
-  if(S._attackMode){
-    // hint suppressed — turn bar already shows ⚔ Scegli carta!
-  }
+  if(phase==='draw'&&isMe){ en('btn-draw');en('btn-knock'); }
+  if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode) en('btn-discard-drawn');
+  if(phase==='special'&&isMe) hint.textContent='Scegli l\'azione per la carta speciale';
+  if(['draw','discard','forced-discard'].includes(phase)&&gs?.discardTop&&!S._attackMode&&!S._attackAnnouncer) en('btn-attack');
 }
 
 // ── Hand click ────────────────────────────────────────────────────────────
@@ -873,10 +864,10 @@ function animDeckDraw(onArrive) {
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
-$('btn-draw').addEventListener('click',()=>{socket.emit('game:draw');hide($('btn-draw'));hide($('btn-knock'));});
+$('btn-draw').addEventListener('click',()=>{socket.emit('game:draw');$('btn-draw').disabled=true;$('btn-knock').disabled=true;});
 $('deck-pile').addEventListener('click',()=>{
   if(S.gameState?.phase==='draw'&&S.gameState.currentPlayerUserId===S.userId)
-    socket.emit('game:draw'),hide($('btn-draw')),hide($('btn-knock'));
+    socket.emit('game:draw');$('btn-draw').disabled=true;$('btn-knock').disabled=true;
 });
 $('btn-knock').addEventListener('click',()=>{
   if(!confirm('Vuoi davvero bussare? Tutti gli altri faranno un ultimo turno.'))return;
@@ -889,8 +880,8 @@ $('btn-discard-drawn').addEventListener('click',discardDrawn);
 // then announce to others so they see the banner
 $('btn-attack').addEventListener('click',()=>{
   SFX.play('Attacknotify', 0.7);
-  S._attackMode=true;      // cards become clickable right now
-  hide($('btn-attack'));
+  S._attackMode=true;
+  $('btn-attack').disabled=true;
   renderMyHand();renderActions();renderTurnBanner();
   socket.emit('game:announce-attack'); // broadcast announcement to all other players
 });
@@ -928,6 +919,9 @@ function showSpecial(type,card){
   }
 
   show($('panel-special'));
+  // Skip button: only available for card 9 peek (8 swap is mandatory)
+  const skipBtn=$('btn-special-skip');
+  if(skipBtn) skipBtn.style.display = type==='8' ? 'none' : '';
   $('special-card-preview').innerHTML=cardHTML({...card,known:true},{cls:'anim-appear'});
 
   if(type==='8'){

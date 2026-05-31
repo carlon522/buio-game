@@ -128,8 +128,10 @@ function botAct(roomId, botId) {
       if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'discard') {
         triggerBot(roomId); return;
       }
-      // Bot knocks with 20% chance in late game (deck < 20 cards left)
-      if (room.deck.length < 20 && Math.random() < 0.20) {
+      // Bot knocks: 40% in late game, or 25% anytime if estimated score is very low
+      const _bp=room.players.find(p=>p.userId===botId);
+      const _est=_bp?_bp.hand.reduce((s,c)=>s+c.value,0):99;
+      if ((room.deck.length < 20 && Math.random() < 0.40) || (_est <= 9 && Math.random() < 0.25)) {
         const knockRes = room.knock(botId);
         if (!knockRes.error) {
           io.to(roomId).emit('game:knocked', { username: room.players.find(p=>p.userId===botId)?.username });
