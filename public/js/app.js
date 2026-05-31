@@ -572,14 +572,14 @@ function renderActions() {
   hide($('btn-draw'));hide($('btn-knock'));hide($('btn-attack'));hide($('btn-discard-drawn'));
   hint.textContent='';
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
-  if(myPlayer?.isEliminated){ hint.textContent='👁 Sei eliminato — stai guardando'; return; }
+  if(myPlayer?.isEliminated){ return; }
   // All actions frozen during attack reveal overlay
   if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
 
   if(phase==='draw'&&isMe){ show($('btn-draw'));show($('btn-knock')); }
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){ show($('btn-discard-drawn')); }
   if(phase==='forced-discard'&&isMe){
-    hint.textContent='⚠ Effetto 10 — Scegli una carta da scartare PRIMA di pescare!';
+    // hint suppressed — turn bar shows 🔟 Scarta prima!
   }
   if(phase==='special'&&isMe){
     hint.textContent='Scegli l\'azione per la carta speciale';
@@ -590,7 +590,7 @@ function renderActions() {
     show($('btn-attack'));
   }
   if(S._attackMode){
-    hint.textContent='⚔ Scegli carta da attaccare';
+    // hint suppressed — turn bar already shows ⚔ Scegli carta!
   }
 }
 
@@ -922,7 +922,7 @@ function showSpecial(type,card){
     // Card 9: NO popup — activate nove9 mode so user taps a hand card directly
     S._nove9Mode=true;
     addLog('🔍 Nove: tocca una tua carta per sbirciare!','gold');
-    toast('👆 Tocca una carta della tua mano per sbirciare (3 secondi)','success',4000);
+    // toast removed — in-hand card highlight already signals nove9 mode
     renderMyHand();renderActions(); // shows clickable hint on cards
     return; // skip the panel entirely
   }
@@ -931,20 +931,44 @@ function showSpecial(type,card){
   $('special-card-preview').innerHTML=cardHTML({...card,known:true},{cls:'anim-appear'});
 
   if(type==='8'){
-    $('special-title').textContent='🔄 Otto — Scambia una Carta!';
-    $('special-desc').textContent="Hai scartato l'8. Scegli prima la TUA carta, poi quella dell'avversario.";
+    $('special-title').textContent='🔄 Scambia';
+    $('special-desc').textContent='Scegli la tua carta, poi quella di un avversario';
     const myCount=S.gameState?.players.find(p=>p.userId===S.userId)?.cardCount??4;
     const opp=(S.gameState?.players||[]).filter(p=>p.userId!==S.userId&&!p.isEliminated);
     let selMyVI=null;
 
     $('special-actions').innerHTML=`
-      <p style="font-size:.8rem;font-weight:700;color:var(--gold-lt)">1️⃣ Quale TUA carta vuoi dare?</p>
-      <div class="special-hand-row" id="s8-mine">${Array(myCount).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>
+      <p class="s8-label">La tua carta</p>
+      <div class="special-hand-row" id="s8-mine" style="opacity:0">${Array(myCount).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>
       <div id="s8-step2" style="display:none;margin-top:.75rem">
-        <p style="font-size:.8rem;font-weight:700;color:var(--gold-lt)">2️⃣ Da chi?</p>
+        <p class="s8-label">Con chi?</p>
         <div class="special-opts" id="s8-opp"></div>
         <div id="s8-theirs"></div>
       </div>`;
+
+    // Animate hand cards flying into panel: each card ghosts from hand → panel slot
+    requestAnimationFrame(()=>{
+      const handCards=$('my-hand').querySelectorAll('.card-3d');
+      const panelSlots=$('s8-mine').querySelectorAll('.card-3d');
+      const stCS=getComputedStyle(document.documentElement);
+      Array.from(panelSlots).forEach((pCard,i)=>{
+        const hCard=handCards[i];
+        if(!hCard||!pCard) return;
+        const hr=hCard.getBoundingClientRect(), pr=pCard.getBoundingClientRect();
+        if(!hr.width||!pr.width) return;
+        const g=document.createElement('div');
+        g.className='card-3d card-back';
+        g.style.cssText=`position:fixed;left:${hr.left}px;top:${hr.top}px;width:${hr.width}px;height:${hr.height}px;z-index:9996;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none`;
+        document.body.appendChild(g);
+        const delay=i*55;
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{
+          g.style.transition=`left 360ms ${delay}ms cubic-bezier(.25,.46,.45,.94),top 360ms ${delay}ms cubic-bezier(.25,.46,.45,.94),width 360ms ${delay}ms,height 360ms ${delay}ms`;
+          g.style.left=pr.left+'px'; g.style.top=pr.top+'px';
+          g.style.width=pr.width+'px'; g.style.height=pr.height+'px';
+        }));
+        setTimeout(()=>{ g.remove(); pCard.style.opacity='1'; },delay+400);
+      });
+    });
 
     $('s8-mine').querySelectorAll('.card-3d').forEach(el=>{
       el.addEventListener('click',()=>{
@@ -958,13 +982,25 @@ function showSpecial(type,card){
             const tid=btn.dataset.id,cnt=parseInt(btn.dataset.count);
             $('s8-opp').querySelectorAll('.special-opt').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
             $('s8-theirs').innerHTML=`
-              <p style="font-size:.8rem;font-weight:700;color:var(--gold-lt);margin-top:.75rem">3️⃣ Quale sua carta vuoi?</p>
+              <p class="s8-label">Quale carta?</p>
               <div class="special-hand-row">${Array(cnt).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>`;
             $('s8-theirs').querySelectorAll('.card-3d').forEach(cb=>{
               cb.addEventListener('click',()=>{
                 const myServerIdx=S.handOrder?S.handOrder[selMyVI]:selMyVI;
-                socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId:tid,targetCardIndex:parseInt(cb.dataset.index)});
-                hide($('panel-special'));
+                // Cross-animate the two selected cards before closing
+                const myEl=$('s8-mine').querySelectorAll('.card-3d')[selMyVI];
+                const theirEl=cb;
+                if(myEl&&theirEl){
+                  const mr=myEl.getBoundingClientRect(), tr2=theirEl.getBoundingClientRect();
+                  [myEl,theirEl].forEach(el=>{ el.style.transition='transform .35s cubic-bezier(.25,.46,.45,.94),opacity .35s'; el.style.transform='scale(1.15)'; el.style.opacity='.6'; });
+                  setTimeout(()=>{
+                    socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId:tid,targetCardIndex:parseInt(cb.dataset.index)});
+                    hide($('panel-special'));
+                  },380);
+                } else {
+                  socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId:tid,targetCardIndex:parseInt(cb.dataset.index)});
+                  hide($('panel-special'));
+                }
               });
             });
           });

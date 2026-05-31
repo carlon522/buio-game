@@ -102,8 +102,10 @@ input,select{font-family:inherit}
 .empty-state{color:rgba(255,248,240,.28);font-style:italic;font-size:.86rem;padding:1.5rem;text-align:center;line-height:1.65}
 
 /* ── Overlays ────────────────────────────────────────────────────────────── */
-.panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(6px);padding:1rem}
-.ov-card{background:linear-gradient(160deg,#281400,#170900);border:1px solid rgba(196,133,59,.38);border-radius:16px;padding:2rem;width:100%;max-width:480px;display:flex;flex-direction:column;gap:1.2rem;align-items:center;box-shadow:0 24px 64px rgba(0,0,0,.75);text-align:center}
+.panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:200;padding:1rem}
+.ov-card{background:rgba(16,6,0,.97);border:1px solid rgba(196,133,59,.42);border-radius:16px;padding:2rem;width:100%;max-width:480px;display:flex;flex-direction:column;gap:1.2rem;align-items:center;box-shadow:0 28px 72px rgba(0,0,0,.92);text-align:center;animation:ov-in .28s cubic-bezier(.34,1.1,.64,1)}
+@keyframes ov-in{from{transform:scale(.93) translateY(12px);opacity:0}to{transform:none;opacity:1}}
+.s8-label{font-size:.78rem;font-weight:700;color:var(--gold-lt);letter-spacing:.05em;text-transform:uppercase;margin-bottom:.25rem}
 .ov-card h2{font-size:1.3rem;color:var(--gold-lt)}
 .ov-footer{display:flex;flex-direction:column;align-items:center;gap:.75rem;width:100%}
 .waiting-players{display:flex;flex-direction:column;gap:.45rem;width:100%}
