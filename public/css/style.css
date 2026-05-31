@@ -609,28 +609,32 @@ input,select{font-family:inherit}
 /* turn-banner class kept for compat but no longer displayed as a tall bar */
 .turn-banner{display:none}
 
-/* ── Turn notification — floats on the table below opponents ─────────────── */
-.turn-notification{
-  position:absolute;
-  bottom:52%;left:50%;
-  transform:translateX(-50%);
-  z-index:8;
-  background:rgba(0,0,0,.68);
-  border:1px solid rgba(196,133,59,.35);
-  border-radius:12px;padding:.45rem 1.1rem;
-  text-align:center;pointer-events:none;
-  backdrop-filter:blur(6px);
-  animation:tn-in .35s ease-out;
-  max-width:80%;
-  white-space:nowrap;
+/* ── Turn bar — slim strip between log and hand ──────────────────────────── */
+.turn-bar{
+  display:flex;align-items:center;justify-content:center;
+  padding:.28rem .75rem;flex-shrink:0;
+  font-size:.75rem;font-weight:700;letter-spacing:.04em;
+  background:rgba(255,255,255,.06);
+  border-top:2px solid rgba(255,255,255,.08);
+  border-bottom:2px solid rgba(255,255,255,.08);
+  transition:background .25s,border-color .25s,color .25s;
+  min-height:28px;
 }
-.turn-notification.my-turn{ border-color:var(--gold);background:rgba(196,133,59,.18); }
-.turn-notification.attack-time{ border-color:var(--danger);background:rgba(231,76,60,.18); }
-.tn-title{font-size:.82rem;font-weight:800;color:var(--gold-lt)}
-.turn-notification.my-turn .tn-title{color:var(--gold-lt)}
-.turn-notification.attack-time .tn-title{color:#ff8f85}
-.tn-sub{font-size:.65rem;color:rgba(255,248,240,.45);margin-top:.12rem}
-@keyframes tn-in{from{opacity:0;transform:translateX(-50%) translateY(6px)}to{opacity:1;transform:translateX(-50%)}}
+.turn-bar.my-turn{
+  background:rgba(196,133,59,.22);
+  border-top-color:var(--gold);border-bottom-color:var(--gold);
+  color:var(--gold-lt);
+}
+.turn-bar.attack-time{
+  background:rgba(231,76,60,.22);
+  border-top-color:var(--danger);border-bottom-color:var(--danger);
+  color:#ff8f85;
+}
+.turn-bar.other-turn{
+  background:rgba(255,255,255,.05);
+  border-top-color:rgba(255,255,255,.1);border-bottom-color:rgba(255,255,255,.1);
+  color:rgba(255,248,240,.5);
+}
 
 /* ── Mobile + universal fixes ────────────────────────────────────────────── */
 /* No double-tap zoom, no highlight flash, no text selection during play */

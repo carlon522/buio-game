@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0e0800">
 <title>BUIO – Gioco di Carte</title>
-<link rel="stylesheet" href="/css/style.css?v=22">
+<link rel="stylesheet" href="/css/style.css?v=23">
 </head>
 <body>
 
@@ -176,11 +176,6 @@
       <div class="poker-table" id="poker-table">
 
         <!-- Opponents are injected here by JS at the correct seat positions -->
-        <!-- Turn notification badge: floats on the table, centered -->
-        <div id="turn-notification" class="turn-notification hidden">
-          <div class="tn-title" id="tn-title"></div>
-          <div class="tn-sub"   id="tn-sub"></div>
-        </div>
         <div id="seats-container" class="seats-container"></div>
 
         <!-- Center of table: deck + discard only (log moved outside flex row) -->
@@ -213,6 +208,11 @@
       <button id="btn-ready" class="btn-ghost peek-ready-btn">✓ Ho memorizzato</button>
     </div>
     <div id="game-log" class="activity-bar"></div>
+
+    <!-- TURN BAR — simple colored strip between log and hand -->
+    <div id="turn-bar" class="turn-bar hidden">
+      <span id="turn-bar-text"></span>
+    </div>
 
     <!-- MY AREA — fixed at bottom -->
     <div class="my-area">
@@ -288,6 +288,6 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="/js/app.js?v=22"></script>
+<script src="/js/app.js?v=23"></script>
 </body>
 </html>

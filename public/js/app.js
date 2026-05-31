@@ -404,43 +404,27 @@ function renderTurnBanner() {
   const gs=S.gameState;if(!gs)return;
   const isMe=gs.currentPlayerUserId===S.userId,phase=gs.phase;
   const cur=gs.players.find(p=>p.userId===gs.currentPlayerUserId);
-  const tn=$('turn-notification');
+  const bar=$('turn-bar'),txt=$('turn-bar-text');
   $('info-round').textContent=gs.roundNumber||1;
   gs.lastRound?show($('last-round-pill')):hide($('last-round-pill'));
 
-  if(S._attackMode){
-    tn.className='turn-notification attack-time';
-    $('tn-title').textContent='⚔ Clicca la carta da usare!';
-    $('tn-sub').textContent='Puoi attaccare più volte se hai più carte uguali';
-    show(tn);return;
-  }
-  if(phase==='scoring'){
-    tn.className='turn-notification';
-    $('tn-title').textContent='📊 Fine Round — Punteggi';
-    $('tn-sub').textContent='';
-    show(tn);return;
-  }
+  function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; show(bar); }
+
+  if(S._attackMode){ setBar('attack-time','⚔ Clicca la carta da usare!');return; }
+  if(phase==='scoring'){ setBar('other-turn','📊 Fine Round — Punteggi');return; }
   if(phase==='special'){
-    tn.className=isMe?'turn-notification my-turn':'turn-notification';
-    $('tn-title').textContent=isMe?'✨ Completa l\'azione speciale':`✨ ${cur?.username||'...'} sta completando carta speciale`;
-    $('tn-sub').textContent='';show(tn);return;
+    setBar(isMe?'my-turn':'other-turn', isMe?'✨ Completa l\'azione speciale':`✨ ${cur?.username||'...'} sta completando carta speciale`);return;
   }
   if(phase==='forced-discard'){
-    tn.className=isMe?'turn-notification attack-time':'turn-notification';
-    $('tn-title').textContent=isMe?'🔟 Devi scartare PRIMA di pescare!':`🔟 ${cur?.username||'...'} deve scartare prima di pescare`;
-    $('tn-sub').textContent=isMe?'Effetto del 10: scegli una carta da scartare dalla mano':'';
-    show(tn);return;
+    setBar(isMe?'attack-time':'other-turn', isMe?'🔟 Devi scartare PRIMA di pescare!':`🔟 ${cur?.username||'...'} deve scartare prima di pescare`);return;
   }
   if(isMe){
-    tn.className='turn-notification my-turn';
-    if(phase==='draw'){$('tn-title').textContent=gs.lastRound?'⚡ Tuo Turno — Ultimo Giro!':'⭐ Il Tuo Turno!';$('tn-sub').textContent='Clicca il mazzo per pescare — oppure ✊ Busso';}
-    else if(phase==='discard'){const d=S.drawnCard;$('tn-title').textContent='Cosa fare con la carta pescata?';$('tn-sub').textContent=d?.known?`${d.label}${d.symbol} (${d.value}pt) — tienitela o scartala`:'Tienitela o scartala';}
-    show(tn);
+    if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Tuo Turno — Ultimo Giro! — clicca il mazzo':'⭐ Il Tuo Turno! — clicca il mazzo per pescare');
+    else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta — ${d.label}${d.symbol} (${d.value}pt)`:'Tieni la pescata o scartala');}
+    else setBar('my-turn','⭐ Il Tuo Turno!');
   } else {
-    tn.className='turn-notification';
-    $('tn-title').textContent=`Turno di ${cur?.username||'…'}`;
-    $('tn-sub').textContent=phase==='draw'?'Sta per pescare…':phase==='discard'?'Sta scegliendo…':'';
-    show(tn);
+    const sub=phase==='draw'?'sta pescando…':phase==='discard'?'sta scegliendo…':'';
+    setBar('other-turn',`Turno di ${cur?.username||'…'}${sub?' — '+sub:''}`);
   }
 }
 
