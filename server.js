@@ -611,8 +611,8 @@ io.on('connection', socket => {
     const result = room.attack(me.userId, cardIndex);
     if (result.error) return socket.emit('game:error', { message: result.error });
 
-    clearTimeout(room._announceTimer); // cancel 30s auto-cancel timer
-    room._revealUntil = Date.now() + 5500;
+    clearTimeout(room._announceTimer);
+    room._revealUntil = Date.now() + 4000;
 
     // Reveal to ALL: show original discard card (pre-attack) and attacker's card
     io.to(room.id).emit('game:attack-reveal', {
@@ -624,21 +624,13 @@ io.on('connection', socket => {
       penaltyCard: result.penaltyCard || null
     });
 
-    // Delay ALL state updates until after the reveal overlay closes (overlay fades at 5s)
-    // This way the card count/hand changes only appear AFTER the announcement sequence
+    // Send state at 3.5s — right when the result label appears on the reveal overlay.
+    // The game:state arrival clears _attackRevealActive on the client, unblocking the game.
     setTimeout(() => {
-      room._revealUntil = 0; // unblock game actions after reveal
+      room._revealUntil = 0;
       io.to(room.id).emit('game:state', room.getPublicState());
-      if (result.success) {
-        // Success: show updated hand after overlay gone
-        socket.emit('game:private', room.getPrivateState(me.userId));
-      } else {
-        // Failed: penalty card appears 700ms after state update
-        setTimeout(() => {
-          socket.emit('game:private', room.getPrivateState(me.userId));
-        }, 700);
-      }
-    }, 5100);
+      socket.emit('game:private', room.getPrivateState(me.userId));
+    }, 3500);
     // No window timer â€” attack can happen again any time
   });
 

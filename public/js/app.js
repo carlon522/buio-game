@@ -206,6 +206,8 @@ $('btn-leave-room').addEventListener('click',()=>{
 // ── Game state ────────────────────────────────────────────────────────────
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
+  // If state arrives while attack reveal is active, unblock game immediately
+  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; }
   S.gameState=state;
   if(state.status==='waiting'){showWaiting(state);return;}
   hide($('panel-waiting'));
@@ -947,25 +949,19 @@ socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCar
   hide($('attack-announce-bar'));
   renderActions();
 
-  setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 3200);
+  setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 2800);
   showAttackReveal(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard);
   addLog(success?`✅ ${attackerUsername}: azzeccato! ${cardStr(card)}`:`❌ ${attackerUsername}: sbagliato! +1 carta`,success?'success':'danger');
 
-  // At 2.7s: clear selection visual, update hand/score
+  // At 2.5s: clear selection visual (game:state will drive the full unpause)
   setTimeout(()=>{
     if(attackerUserId===S.userId) S._attackMode=false;
     S._selIdx=-1;
     renderMyHand();renderScore();renderSeats();
-  },2700);
+  },2500);
 
-  // At 4.5s: overlay fading — UNPAUSE, restore buttons
-  setTimeout(()=>{
-    S._attackRevealActive=false;
-    renderActions();renderTurnBanner();
-  },4500);
-
-  // Safety: always unpause after 6s even if something went wrong
-  setTimeout(()=>{ S._attackRevealActive=false; renderActions(); },6000);
+  // Safety fallback: if game:state never arrives, unpause after 5s
+  setTimeout(()=>{ if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; renderActions();renderTurnBanner(); } },5000);
 });
 
 // ── Attack reveal: discard card shown first, then attack card ─────────────
