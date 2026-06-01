@@ -663,23 +663,22 @@ function onHandClick(visualIdx) {
 
   if(S._attackMode){
     if(cardEl){
-      // Brief gold ring lift, then card flies to pile
+      // Capture rect NOW before any re-render can detach cardEl
+      const slotR = cardEl.getBoundingClientRect();
+      const pileR = Cards.rect($('discard-pile'));
+      // Brief gold ring lift, then immediately fly
       cardEl.style.pointerEvents='none';
-      cardEl.style.transition='transform .2s cubic-bezier(.34,1.2,.64,1),box-shadow .2s';
-      cardEl.style.transform='translateY(-14px) scale(1.08)';
+      cardEl.style.transition='transform .18s cubic-bezier(.34,1.2,.64,1),box-shadow .18s';
+      cardEl.style.transform='translateY(-12px) scale(1.06)';
       cardEl.style.boxShadow='0 0 0 3px var(--gold),0 10px 24px rgba(0,0,0,.65)';
       setTimeout(()=>{
-        const slotR=cardEl.getBoundingClientRect();
-        const pileR=Cards.rect($('discard-pile'));
-        cardEl.style.boxShadow='';
-        cardEl.style.transform='';
         S._skipDiscard=true;
         Cards.attackCard(slotR, pileR, ()=>{
           S._skipDiscard=false;
           const c=S._pendingDiscardCard||S.gameState?.discardTop;
           S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
         });
-      },220);
+      },200);
     }
     $('discard-pile')?.classList.remove('atk-target');
     socket.emit('game:attack',{cardIndex:serverIdx});
@@ -748,6 +747,7 @@ function animateCardSwap(fromVI, toVI) {
 
 function discardDrawn() {
   SFX.play('Card', 0.5);
+  // Capture rects BEFORE hiding the slot (hidden elements have zero rect)
   const drawnSlotRect = Cards.rect($('drawn-slot'));
   const pileRect      = Cards.rect($('discard-pile'));
   const card          = S.drawnCard?.known ? S.drawnCard : null;
