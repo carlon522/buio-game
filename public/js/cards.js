@@ -81,18 +81,36 @@ const Cards = (() => {
   }
 
   // Flip a ghost in-place: face-down → face-up
+  // Waits for the card image to load before revealing so it never flips open blank.
   function flipUp(g, card, onDone) {
     if (!g) { onDone?.(); return; }
-    g.style.transition = 'transform .12s ease-in';
-    g.style.transform  = 'scaleX(0)';
-    setTimeout(() => {
-      g.className        = 'card-3d card-front';
-      g.style.background = '#f5f0e8';
-      g.innerHTML        = `<img src="/cards/${card.suit}_${card.value}.jpg" class="card-img">`;
-      g.style.transition = 'transform .12s ease-out';
-      g.style.transform  = 'scaleX(1)';
-      setTimeout(() => onDone?.(), 130);
-    }, 130);
+    // Pre-load image BEFORE starting the fold-down so it's ready when we unfold
+    const img = new Image();
+    img.className = 'card-img';
+    img.src = `/cards/${card.suit}_${card.value}.jpg`;
+
+    const doFlip = () => {
+      g.style.transition = 'transform .12s ease-in';
+      g.style.transform  = 'scaleX(0)';
+      setTimeout(() => {
+        g.className        = 'card-3d card-front';
+        g.style.background = '#f5f0e8';
+        g.innerHTML        = '';
+        g.appendChild(img);
+        g.style.transition = 'transform .12s ease-out';
+        g.style.transform  = 'scaleX(1)';
+        setTimeout(() => onDone?.(), 130);
+      }, 130);
+    };
+
+    if (img.complete) {
+      doFlip(); // already cached
+    } else {
+      img.onload  = doFlip;
+      img.onerror = doFlip; // flip anyway on error — fallback bg colour shows
+      // Safety: don't wait more than 300ms for the image
+      setTimeout(() => { if (!img.complete) doFlip(); }, 300);
+    }
   }
 
   // Flip a ghost in-place: face-up → face-down
@@ -128,11 +146,19 @@ const Cards = (() => {
   }
 
   // 1. DRAW: deck → drawn-card-display (the exact card area, not the wider slot container).
+  //    Pre-loads the card image so it's ready before the flip reveal.
   function drawFromDeck(card, onDone) {
     const dk   = rect(document.getElementById('deck-pile'));
     // Target the card-3d inside drawn-card-display for pixel-perfect alignment.
     const slot = drawnCardRect() || rect(document.getElementById('drawn-slot'));
     if (!dk || !slot) { onDone?.(); return; }
+
+    // Pre-load image immediately so it's cached by the time the ghost flips
+    if (card) {
+      const preload = new Image();
+      preload.src = `/cards/${card.suit}_${card.value}.jpg`;
+    }
+
     const g = fly(dk, slot, { dur: 380, z: 9995 });
     if (!g) return;
     if (card) {
@@ -220,18 +246,27 @@ const Cards = (() => {
     });
   }
 
-  // 7. OPPONENT DISCARD: seat mini-cards → pile (full size).
-  //    Ghost starts face-up at the seat and grows to full card size as it flies.
-  //    (Mid-flight flipUp was broken — it overwrites the ongoing position transition.)
+  // 7. OPPONENT DISCARD: seat mini-cards → pile (full size), face-up in flight.
+  //    Pre-loads the image so the ghost doesn't show blank at the seat.
   function oppDiscard(seat, pileRect, card, onLand) {
     const seatRect = seat ? seatCardsRect(seat) : null;
     if (!seatRect || !pileRect) { onLand?.(); return; }
     const { cw, ch } = css();
-    fly(seatRect, pileRect, {
+
+    const doFly = () => fly(seatRect, pileRect, {
       faceUp: !!card, card,
       toW: cw, toH: ch, dur: 460, z: 9995,
       onLand: g => { g?.remove(); onLand?.(); },
     });
+
+    if (card) {
+      const img = new Image();
+      img.src = `/cards/${card.suit}_${card.value}.jpg`;
+      if (img.complete) { doFly(); }
+      else { img.onload = doFly; img.onerror = doFly; setTimeout(doFly, 200); }
+    } else {
+      doFly();
+    }
   }
 
   // 8. SWAP: two rects cross each other (card 8 special)
