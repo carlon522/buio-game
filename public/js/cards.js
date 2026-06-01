@@ -92,21 +92,6 @@ const Cards = (() => {
     return g;
   }
 
-  // Flip ghost face-down in place AFTER it has landed (position done, no overlap).
-  function flipToBack(g, onDone) {
-    if (!g) { if (onDone) onDone(); return; }
-    g.style.transition = 'transform .13s ease-in';
-    g.style.transform  = 'scaleX(0)';
-    setTimeout(function() {
-      g.className        = 'card-3d card-back';
-      g.innerHTML        = '';
-      g.style.background = '';
-      g.style.transition = 'transform .13s ease-out';
-      g.style.transform  = 'scaleX(1)';
-      setTimeout(function() { if (onDone) onDone(); }, 140);
-    }, 140);
-  }
-
   // 1. DRAW: deck → drawn-slot (face-down ghost). onReveal shows drawn card.
   function drawFromDeck(onReveal) {
     var dk   = rect(document.getElementById('deck-pile'));
@@ -118,21 +103,16 @@ const Cards = (() => {
   }
 
   // 2. DISCARD HAND CARD:
-  //    Ghost A — discarded hand card → pile, face-DOWN (hand cards are hidden).
-  //    Ghost B — drawn card → rightmost slot, face-UP (you saw it), flips DOWN on arrival.
+  //    Ghost A — discarded card → pile, face-down.
+  //    Ghost B — drawn card → rightmost slot, face-down (it enters the hand hidden).
   function discardHandCard(opts) {
     fly(opts.handSlotRect, opts.pileRect, { dur: 400, z: 9999,
       onLand: function(g) { g.remove(); if (opts.onPileLand) opts.onPileLand(); }
     });
     if (opts.drawnSlotRect && opts.lastSlotRect) {
-      fly(opts.drawnSlotRect, opts.lastSlotRect,
-        { faceUp: !!(opts.drawnCard && opts.drawnCard.known), card: opts.drawnCard,
-          dur: 400, z: 9998,
-          onLand: function(g) {
-            flipToBack(g, function() { g.remove(); if (opts.onHandLand) opts.onHandLand(); });
-          }
-        }
-      );
+      fly(opts.drawnSlotRect, opts.lastSlotRect, { dur: 400, z: 9998,
+        onLand: function(g) { g.remove(); if (opts.onHandLand) opts.onHandLand(); }
+      });
     } else {
       setTimeout(function() { if (opts.onHandLand) opts.onHandLand(); }, 450);
     }
