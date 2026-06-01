@@ -466,16 +466,14 @@ function renderMyHand() {
     const raiseAttr=raise>0?` data-raise="${raise}"`:'';
     const hiddenAttr=S._animSlot===visualIdx?' style="visibility:hidden"':'';
 
-    // Show face-up if: in peek phase for this visual index, OR card 9 temp reveal
+    // Show face-up: initial peek OR nove9/special card reveal
     const isPeekUp=S._peekRevealed?.has(visualIdx);
     const isTempUp=S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx;
     if(isPeekUp){
-      // Use peekCards data — privateState.hand still has known:false during peek phase
       const card=S.peekCards?.[visualIdx];
       if(card) return cardHTML({...card,known:true},{cls,index:visualIdx});
     }
     if(isTempUp){
-      // Nove9 temp reveal — privateState was updated by game:peeked before this renders
       const card=S.privateState?.hand?.[serverIdx];
       if(card&&card.suit) return cardHTML({...card,known:true},{cls,index:visualIdx});
     }
@@ -557,15 +555,13 @@ function onHandClick(visualIdx) {
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
   const cardEl=$('my-hand').querySelectorAll('.card-3d')[visualIdx];
 
-  // ── Card 9 nove9 mode: tap to temporarily reveal a card ──
+  // ── Card 9 nove9: tap card → briefly shows face-up in hand ──
   if(S._nove9Mode){
     S._nove9Mode=false;
     SFX.play('9revealclick', 0.7);
     socket.emit('game:use-special-9',{cardIndex:serverIdx});
-    // Immediately flip up the tapped card; server will confirm via game:peeked
     S._tempRevealServerIdx=serverIdx;
     renderMyHand();renderActions();
-    // Auto-cover after 3s
     setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },3000);
     return;
   }
@@ -932,14 +928,14 @@ $('btn-special-skip').addEventListener('click',()=>{
 // ── Peek reveal (card 9) ───────────────────────────────────────────────────
 // Briefly show the replacement card drawn during forced-discard (10-card effect)
 socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
-  // Wait until the replacement ghost has flown into the slot and _animSlot cleared
+  // Show the replacement card face-up in hand for 2.5s after it lands
   setTimeout(()=>{
     SFX.play('Card',0.3);
     if(!S.handOrder) S.handOrder=Array.from({length:S.gameState?.players.find(p=>String(p.userId)===String(S.userId))?.cardCount??4},(_,i)=>i);
     if(S.privateState?.hand?.[serverIndex]) S.privateState.hand[serverIndex]={...card,known:true,index:serverIndex};
     S._tempRevealServerIdx=serverIndex;
     renderMyHand();
-    setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); }, 2500);
+    setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },2500);
     addLog(`🔟 Hai pescato: ${card.label}${card.symbol} — ricordala!`,'gold');
   },820);
 });
@@ -948,11 +944,10 @@ socket.on('game:peeked',({cardIndex,card})=>{
   if(S.privateState?.hand?.[cardIndex]) S.privateState.hand[cardIndex]={...card,known:true,index:cardIndex};
   renderScore();
   const vi=(S.handOrder||[]).findIndex(si=>si===cardIndex);
-  // _tempRevealServerIdx drives renderMyHand to show the card face-up.
-  // No direct DOM flip — renderMyHand handles it cleanly on every re-render.
+  // Show the peeked card face-up in hand for 3s, then back down
   S._tempRevealServerIdx=cardIndex;
   renderMyHand();
-  setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); }, 3000);
+  setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },3000);
   addLog(`👁 Posizione #${vi>=0?vi+1:'?'}: ricordatela!`,'gold');
 });
 
