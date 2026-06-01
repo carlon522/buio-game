@@ -591,27 +591,47 @@ function onHandClick(visualIdx) {
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
     SFX.play('Card');
-    // Capture rects BEFORE any DOM change
-    const handSlotRect = cardEl.getBoundingClientRect();
-    const pileRect     = Cards.rect($('discard-pile'));
-    const drawnSlotRect= Cards.drawnCardRect(); // rect of the actual card-3d, not the container
-    const drawnCard    = S.drawnCard;
+    // Snapshot all card positions BEFORE any DOM change (needed for FLIP slide)
+    const prevRects = Array.from($('my-hand').querySelectorAll('.card-3d'))
+      .map(el => el.getBoundingClientRect());
+    const handSlotRect  = cardEl.getBoundingClientRect();
+    const pileRect      = Cards.rect($('discard-pile'));
+    const drawnSlotRect = Cards.drawnCardRect();
 
-    // New card goes to the RIGHT END visually (easy to track)
-    const lastVI = S.handOrder.length - 1;
+    // Drawn card goes to the RIGHT END: filter out discarded slot, push drawn at end
+    const lastVI   = S.handOrder.length - 1;
     const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
     newOrder.push(serverIdx);
     S.handOrder = newOrder;
     if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
 
     S._skipDiscard = true;
-    S._animSlot    = lastVI; // hide last slot (where drawn card will land)
-    renderMyHand();          // re-render: discarded slot gone, last slot hidden
+    S._animSlot    = lastVI; // hide the rightmost slot (where drawn card will land)
+    renderMyHand();           // instant re-render — cards have jumped to new positions
 
     socket.emit('game:discard',{handIndex:serverIdx});
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
 
-    // Get the last slot's position (after re-render)
+    // FLIP: slide remaining cards from their OLD positions to their NEW positions
+    // Cards after visualIdx shifted left by 1 — animate them smoothly
+    Array.from($('my-hand').querySelectorAll('.card-3d')).forEach((el,vi)=>{
+      if(vi===lastVI) return; // hidden slot — skip
+      const oldVI = vi < visualIdx ? vi : vi+1; // map new index → old index
+      const oldR  = prevRects[oldVI];
+      if(!oldR) return;
+      const newR  = el.getBoundingClientRect();
+      const dx    = oldR.left - newR.left;
+      if(Math.abs(dx)<1) return; // no movement, skip
+      el.style.transition = 'none';
+      el.style.transform  = `translateX(${dx}px)`;
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        el.style.transition = 'transform 280ms cubic-bezier(.25,.46,.45,.94)';
+        el.style.transform  = '';
+      }));
+      // Clean up inline styles after slide completes
+      setTimeout(()=>{ if(el.isConnected){ el.style.transition=''; el.style.transform=''; }},320);
+    });
+
     const lastSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[lastVI]);
 
     S._selfDiscardGhost = Cards.discardHandCard({
