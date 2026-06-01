@@ -571,27 +571,23 @@ function onHandClick(visualIdx) {
     const handSlotRect  = cardEl.getBoundingClientRect();
     const pileRect      = Cards.rect($('discard-pile'));
     const drawnSlotRect = Cards.drawnCardRect();
-    const drawnData     = S.drawnCard; // capture before clearing
 
-    // Drawn card goes to the RIGHT END
-    const lastVI   = S.handOrder.length - 1;
-    const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
-    newOrder.push(serverIdx);
-    S.handOrder = newOrder;
-    if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
-
+    // Server replaces in-place (hand[serverIdx] = drawnCard).
+    // Client keeps handOrder UNCHANGED — the drawn card fills the exact same slot.
+    // No other card shifts position. Memory game preserved.
     S._skipDiscard = true;
-    S._animSlot    = lastVI;
+    S._animSlot    = visualIdx;   // hide this slot during animation
     renderMyHand();
 
     socket.emit('game:discard',{handIndex:serverIdx});
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
 
-    const lastSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[lastVI]);
+    // Target: same slot position (hidden, but has valid rect)
+    const targetSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[visualIdx]);
 
     Cards.discardHandCard({
-      handSlotRect, pileRect, drawnSlotRect, lastSlotRect,
-      drawnCard: drawnData,  // Ghost B shows this card face-up as it slides into hand
+      handSlotRect, pileRect, drawnSlotRect,
+      lastSlotRect: targetSlotRect, // drawn card lands in the SAME slot
       onPileLand: ()=>{
         S._skipDiscard=false;
         const c=S._pendingDiscardCard||S.gameState?.discardTop;
@@ -926,16 +922,12 @@ $('btn-special-skip').addEventListener('click',()=>{
 });
 
 // ── Peek reveal (card 9) ───────────────────────────────────────────────────
-// Briefly show the replacement card drawn during forced-discard (10-card effect)
+// 10-card effect: update private state so score is correct; no visual reveal
 socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
-  // Show the replacement card face-up in hand for 2.5s after it lands
   setTimeout(()=>{
     SFX.play('Card',0.3);
-    if(!S.handOrder) S.handOrder=Array.from({length:S.gameState?.players.find(p=>String(p.userId)===String(S.userId))?.cardCount??4},(_,i)=>i);
     if(S.privateState?.hand?.[serverIndex]) S.privateState.hand[serverIndex]={...card,known:true,index:serverIndex};
-    S._tempRevealServerIdx=serverIndex;
-    renderMyHand();
-    setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },2500);
+    renderScore();
     addLog(`🔟 Hai pescato: ${card.label}${card.symbol} — ricordala!`,'gold');
   },820);
 });
