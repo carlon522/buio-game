@@ -81,15 +81,17 @@ const Cards = (() => {
   }
 
   // Flip a ghost in-place: face-down → face-up
-  // Waits for the card image to load before revealing so it never flips open blank.
+  // Waits for the card image before revealing so it never flips open blank.
+  // ONE-SHOT guard: doFlip can only run once regardless of which path fires first.
   function flipUp(g, card, onDone) {
     if (!g) { onDone?.(); return; }
-    // Pre-load image BEFORE starting the fold-down so it's ready when we unfold
     const img = new Image();
     img.className = 'card-img';
     img.src = `/cards/${card.suit}_${card.value}.jpg`;
 
+    let fired = false;
     const doFlip = () => {
+      if (fired) return; fired = true;
       g.style.transition = 'transform .12s ease-in';
       g.style.transform  = 'scaleX(0)';
       setTimeout(() => {
@@ -104,12 +106,11 @@ const Cards = (() => {
     };
 
     if (img.complete) {
-      doFlip(); // already cached
+      doFlip();
     } else {
       img.onload  = doFlip;
-      img.onerror = doFlip; // flip anyway on error — fallback bg colour shows
-      // Safety: don't wait more than 300ms for the image
-      setTimeout(() => { if (!img.complete) doFlip(); }, 300);
+      img.onerror = doFlip;
+      setTimeout(doFlip, 300); // safety — now guarded by `fired`
     }
   }
 
@@ -262,8 +263,10 @@ const Cards = (() => {
     if (card) {
       const img = new Image();
       img.src = `/cards/${card.suit}_${card.value}.jpg`;
-      if (img.complete) { doFly(); }
-      else { img.onload = doFly; img.onerror = doFly; setTimeout(doFly, 200); }
+      let fired = false;
+      const once = () => { if (!fired) { fired = true; doFly(); } };
+      if (img.complete) { once(); }
+      else { img.onload = once; img.onerror = once; setTimeout(once, 200); }
     } else {
       doFly();
     }
