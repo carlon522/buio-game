@@ -575,8 +575,9 @@ function onHandClick(visualIdx) {
     const handSlotRect  = cardEl.getBoundingClientRect();
     const pileRect      = Cards.rect($('discard-pile'));
     const drawnSlotRect = Cards.drawnCardRect();
+    const drawnData     = S.drawnCard; // capture before clearing
 
-    // Drawn card goes to the RIGHT END: filter out discarded slot, push drawn at end
+    // Drawn card goes to the RIGHT END
     const lastVI   = S.handOrder.length - 1;
     const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
     newOrder.push(serverIdx);
@@ -584,18 +585,17 @@ function onHandClick(visualIdx) {
     if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
 
     S._skipDiscard = true;
-    S._animSlot    = lastVI; // hide the rightmost slot (where drawn card will land)
-    renderMyHand();           // re-render with new handOrder — other cards snap into gap positions
+    S._animSlot    = lastVI;
+    renderMyHand();
 
     socket.emit('game:discard',{handIndex:serverIdx});
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
-    // Note: no FLIP slide — game:state (~100ms) would interrupt it mid-way causing a worse snap.
-    // The two ghosts (A: discard→pile, B: drawn→right slot) make both moves fully traceable.
 
     const lastSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[lastVI]);
 
     Cards.discardHandCard({
       handSlotRect, pileRect, drawnSlotRect, lastSlotRect,
+      drawnCard: drawnData,  // Ghost B shows this card face-up as it slides into hand
       onPileLand: ()=>{
         S._skipDiscard=false;
         const c=S._pendingDiscardCard||S.gameState?.discardTop;
