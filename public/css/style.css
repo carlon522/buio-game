@@ -438,8 +438,7 @@ input,select{font-family:inherit}
   animation:pile-atk 1s ease-in-out infinite;
 }
 @keyframes pile-atk{0%,100%{box-shadow:0 0 0 2px var(--danger),0 0 14px rgba(231,76,60,.4)}50%{box-shadow:0 0 0 3px var(--danger),0 0 28px rgba(231,76,60,.8)}}
-.discard-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f0e8;animation:pile-reveal .22s ease-out}
-@keyframes pile-reveal{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.discard-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f0e8}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 
