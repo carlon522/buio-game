@@ -207,7 +207,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._selfDiscardGhost=null;S._animSlot=null;S._skipDiscard=false; }
+  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._animSlot=null;S._skipDiscard=false; }
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
@@ -594,10 +594,10 @@ function onHandClick(visualIdx) {
 
     const lastSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[lastVI]);
 
-    S._selfDiscardGhost = Cards.discardHandCard({
+    Cards.discardHandCard({
       handSlotRect, pileRect, drawnSlotRect, lastSlotRect,
       onPileLand: ()=>{
-        S._selfDiscardGhost=null; S._skipDiscard=false;
+        S._skipDiscard=false;
         const c=S._pendingDiscardCard||S.gameState?.discardTop;
         S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
       },
@@ -623,10 +623,10 @@ function onHandClick(visualIdx) {
 
     const targetSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[visualIdx]);
 
-    S._selfDiscardGhost = Cards.forcedDiscard({
+    Cards.forcedDiscard({
       handSlotRect, pileRect, deckRect, targetSlotRect,
       onPileLand: ()=>{
-        S._selfDiscardGhost=null; S._skipDiscard=false;
+        S._skipDiscard=false;
         const c=S._pendingDiscardCard||S.gameState?.discardTop;
         S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
       },
@@ -979,11 +979,10 @@ socket.on('game:card-discarded',({card, discarderId})=>{
   S._pendingDiscardCard = card;
   if(discarderId && String(discarderId) !== String(S.userId)){
     animOppDiscard(discarderId, card);
-  } else if(S._selfDiscardGhost){
-    // Ghost is already flying — just store card for pile render when ghost lands
-    S._selfDiscardGhost=null;
-    S._pendingDiscardCard=card;
   } else {
+    // Self-discard: ghost is flying and _skipDiscard=true.
+    // onPileLand/onLand handles renderDiscardPile when ghost arrives.
+    // Safety: if _skipDiscard somehow isn't set, render immediately.
     if(!S._skipDiscard) setTimeout(()=>renderDiscardPile(card),50);
   }
   addLog(`${cardStr(card)} scartata`,'info');
