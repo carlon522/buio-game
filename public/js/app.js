@@ -384,18 +384,10 @@ function flipCardDown(el){
   },250);
 }
 
-// Flip a card element up (face-up) with animation
+// flipCardUp: kept for compatibility — not used in main game flow
 function flipCardUp(el, card){
   if(!el||!card) return;
-  el.style.transition='transform .25s ease-in';
-  el.style.transform='scaleX(0)';
-  setTimeout(()=>{
-    el.className=`card-3d card-front${card.isSpecial?' is-special':''}`;
-    el.innerHTML=`<img src="/cards/${card.suit}_${card.value}.jpg" class="card-img" onerror="this.style.display='none';makeFB(this.parentElement,'${card.label}','${card.symbol}','${card.color==='red'?'red':'black'}')">`;
-    el.style.transition='transform .25s ease-out';
-    el.style.transform='scaleX(1)';
-    setTimeout(()=>{ el.style.transform=''; el.style.transition=''; },280);
-  },250);
+  Cards.flipUp(el, card, ()=>{ el.style.transform=''; el.style.transition=''; });
 }
 
 // ── Board ─────────────────────────────────────────────────────────────────
@@ -603,84 +595,92 @@ function onHandClick(visualIdx) {
 
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode){
     SFX.play('Card');
-    // Server replaces the card IN PLACE: hand[serverIdx] becomes the drawn card.
-    // So handOrder is UNCHANGED — the slot keeps its position. No reflow, no shuffle.
-    const slotRect=cardEl.getBoundingClientRect();
-    const pileRect=$('discard-pile')?.getBoundingClientRect();
-    const drawnRect=$('drawn-slot')?.getBoundingClientRect();
-    const drawnData=S.drawnCard;
+    // Capture rects BEFORE any DOM change
+    const handSlotRect = cardEl.getBoundingClientRect();
+    const pileRect     = Cards.rect($('discard-pile'));
+    const drawnSlotRect= Cards.rect($('drawn-slot'));
+    const drawnCard    = S.drawnCard;
 
-    S._skipDiscard=true;
-    S._animSlot=visualIdx;        // hold this slot empty (visibility:hidden, keeps layout)
-    renderMyHand();
+    // New card goes to the RIGHT END visually (easy to track)
+    const lastVI = S.handOrder.length - 1;
+    const newOrder = S.handOrder.filter((_,i)=>i!==visualIdx);
+    newOrder.push(serverIdx);
+    S.handOrder = newOrder;
+    if(S.cardRaise){ const r=S.cardRaise.filter((_,i)=>i!==visualIdx); r.push(0); S.cardRaise=r; }
+
+    S._skipDiscard = true;
+    S._animSlot    = lastVI; // hide last slot (where drawn card will land)
+    renderMyHand();          // re-render: discarded slot gone, last slot hidden
+
     socket.emit('game:discard',{handIndex:serverIdx});
-    S._selIdx=-1;
+    S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
 
-    // Ghost A — the discarded hand card flies face-down to the pile, reveals on landing
-    const gA=flyGhost(slotRect, pileRect, { dur:460, z:9999, onLand:(g)=>{
-      const c=S._pendingDiscardCard||S.gameState?.discardTop;
-      S._pendingDiscardCard=null; g?.remove(); S._skipDiscard=false;
-      if(c) renderDiscardPile(c);
-    }});
-    S._selfDiscardGhost=gA;
+    // Get the last slot's position (after re-render)
+    const lastSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[lastVI]);
 
-    // Ghost B — the drawn card flies face-up from the drawn-slot INTO the same slot,
-    // holds face-up so you memorise its new home, then flips face-down.
-    setTimeout(()=>{
-      S.drawnCard=null; hide($('drawn-slot'));
-      const target=$('my-hand').querySelectorAll('.card-3d')[visualIdx]?.getBoundingClientRect()||slotRect;
-      if(!drawnRect){ S._animSlot=null; renderMyHand(); return; }
-      flyGhost(drawnRect, target, { faceUp:true, card:drawnData, dur:440, z:9998, onLand:(g)=>{
-        setTimeout(()=>ghostFlipDown(g, ()=>{ g?.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.2); }), 430);
-      }});
-    },250);
+    S._selfDiscardGhost = Cards.discardHandCard({
+      handSlotRect, pileRect, drawnSlotRect, lastSlotRect,
+      onPileLand: ()=>{
+        S._selfDiscardGhost=null; S._skipDiscard=false;
+        const c=S._pendingDiscardCard||S.gameState?.discardTop;
+        S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+      },
+      onHandLand: ()=>{
+        S._animSlot=null; renderMyHand(); SFX.play('Card',0.18);
+      },
+    });
     return;
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
     SFX.play('Card');
-    // Server also replaces IN PLACE here (replaceSlot=serverIdx). handOrder unchanged.
-    const slotRect=cardEl.getBoundingClientRect();
-    const pileRect=$('discard-pile')?.getBoundingClientRect();
-    const deckRect=$('deck-pile')?.getBoundingClientRect();
+    const handSlotRect = cardEl.getBoundingClientRect();
+    const pileRect     = Cards.rect($('discard-pile'));
+    const deckRect     = Cards.rect($('deck-pile'));
 
-    S._skipDiscard=true;
-    S._animSlot=visualIdx;
+    // After forced-discard the replacement arrives at the same visual slot
+    S._skipDiscard = true;
+    S._animSlot    = visualIdx;
     renderMyHand();
     socket.emit('game:forced-discard',{handIndex:serverIdx});
     S._selIdx=-1;
 
-    // Ghost A — discarded card flies to pile
-    const gA=flyGhost(slotRect, pileRect, { dur:460, z:9999, onLand:(g)=>{
-      const c=S._pendingDiscardCard||S.gameState?.discardTop;
-      S._pendingDiscardCard=null; g?.remove(); S._skipDiscard=false;
-      if(c) renderDiscardPile(c);
-    }});
-    S._selfDiscardGhost=gA;
+    const targetSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[visualIdx]);
 
-    // Ghost B — replacement flies face-down from the DECK into the same slot.
-    // The face-up "peek" of the replacement is handled by game:forced-draw-reveal.
-    setTimeout(()=>{
-      const target=$('my-hand').querySelectorAll('.card-3d')[visualIdx]?.getBoundingClientRect()||slotRect;
-      if(!deckRect){ S._animSlot=null; renderMyHand(); return; }
-      flyGhost(deckRect, target, { dur:460, z:9998, onLand:(g)=>{ g?.remove(); S._animSlot=null; renderMyHand(); SFX.play('Card',0.2); }});
-    },250);
+    S._selfDiscardGhost = Cards.forcedDiscard({
+      handSlotRect, pileRect, deckRect, targetSlotRect,
+      onPileLand: ()=>{
+        S._selfDiscardGhost=null; S._skipDiscard=false;
+        const c=S._pendingDiscardCard||S.gameState?.discardTop;
+        S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+      },
+      onDeckLand: ()=>{
+        S._animSlot=null; renderMyHand(); SFX.play('Card',0.18);
+      },
+    });
     return;
   }
 
   if(S._attackMode){
     if(cardEl){
+      // Brief gold ring lift, then card flies to pile
       cardEl.style.pointerEvents='none';
-      // Gold ring highlight so you can clearly see which card you picked
-      cardEl.style.transition='transform .28s cubic-bezier(.34,1.2,.64,1),box-shadow .28s';
-      cardEl.style.transform='translateY(-18px) scale(1.12)';
-      cardEl.style.boxShadow='0 0 0 3px var(--gold), 0 12px 28px rgba(0,0,0,.7)';
+      cardEl.style.transition='transform .2s cubic-bezier(.34,1.2,.64,1),box-shadow .2s';
+      cardEl.style.transform='translateY(-14px) scale(1.08)';
+      cardEl.style.boxShadow='0 0 0 3px var(--gold),0 10px 24px rgba(0,0,0,.65)';
       setTimeout(()=>{
+        const slotR=cardEl.getBoundingClientRect();
+        const pileR=Cards.rect($('discard-pile'));
         cardEl.style.boxShadow='';
-        flyAnim(cardEl,$('discard-pile'));
-      },280);
+        cardEl.style.transform='';
+        S._skipDiscard=true;
+        Cards.attackCard(slotR, pileR, ()=>{
+          S._skipDiscard=false;
+          const c=S._pendingDiscardCard||S.gameState?.discardTop;
+          S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+        });
+      },220);
     }
-    // Clear the discard-pile attack target highlight immediately on click
     $('discard-pile')?.classList.remove('atk-target');
     socket.emit('game:attack',{cardIndex:serverIdx});
     S._selIdx=-1;   // never show selection border on attack
@@ -748,62 +748,23 @@ function animateCardSwap(fromVI, toVI) {
 
 function discardDrawn() {
   SFX.play('Card', 0.5);
-  flyAnim($('drawn-card-display')?.querySelector('.card-3d'),$('discard-pile'));
+  const drawnSlotRect = Cards.rect($('drawn-slot'));
+  const pileRect      = Cards.rect($('discard-pile'));
+  const card          = S.drawnCard?.known ? S.drawnCard : null;
+  S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
   socket.emit('game:discard',{handIndex:-1});
-  S.drawnCard=null;S._selIdx=-1;hide($('drawn-slot'));
+  S._skipDiscard=true;
+  Cards.discardDrawnCard({
+    drawnSlotRect, pileRect, card,
+    onLand: ()=>{
+      S._skipDiscard=false;
+      const c=S._pendingDiscardCard||S.gameState?.discardTop;
+      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+    },
+  });
 }
 
-// ── Unified ghost flight ──────────────────────────────────────────────────
-// Creates a floating card at `from` rect and flies it to `to` rect, optionally
-// resizing to match the destination. The ghost is ALWAYS visible the whole way.
-// opts: {card, faceUp, toW, toH, dur, z, onLand}
-function flyGhost(from, to, opts={}){
-  if(!from||!to){ opts.onLand?.(null); return null; }
-  const cs=getComputedStyle(document.documentElement);
-  const CW=parseInt(cs.getPropertyValue('--cw'))||66, CH=parseInt(cs.getPropertyValue('--ch'))||100;
-  const dur=opts.dur??450;
-  const toW=opts.toW??CW, toH=opts.toH??CH;
-  const g=document.createElement('div');
-  g.className='card-3d '+(opts.faceUp&&opts.card?'card-front':'card-back');
-  if(opts.faceUp&&opts.card){ g.style.background='#f5f0e8'; g.innerHTML=`<img src="/cards/${opts.card.suit}_${opts.card.value}.jpg" class="card-img">`; }
-  g.style.position='fixed'; g.style.left=from.left+'px'; g.style.top=from.top+'px';
-  g.style.width=from.width+'px'; g.style.height=from.height+'px';
-  g.style.zIndex=String(opts.z??9990); g.style.margin='0'; g.style.pointerEvents='none';
-  g.style.overflow='hidden'; g.style.borderRadius='6px';
-  g.style.boxShadow='0 8px 24px rgba(0,0,0,.6)'; g.style.transition='none';
-  document.body.appendChild(g);
-  const tx=to.left+to.width/2-toW/2, ty=to.top+to.height/2-toH/2;
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    const e='cubic-bezier(.25,.46,.45,.94)';
-    g.style.transition=`left ${dur}ms ${e},top ${dur}ms ${e},width ${dur}ms ${e},height ${dur}ms ${e}`;
-    g.style.left=tx+'px'; g.style.top=ty+'px'; g.style.width=toW+'px'; g.style.height=toH+'px';
-  }));
-  setTimeout(()=>opts.onLand?.(g), dur+25);
-  return g;
-}
-// Flip a ghost from face-up to face-down in place (scaleX); then onDone
-function ghostFlipDown(g,onDone){
-  if(!g){onDone?.();return;}
-  g.style.transition='transform .15s ease-in'; g.style.transform='scaleX(0)';
-  setTimeout(()=>{
-    g.className='card-3d card-back'; g.innerHTML=''; g.style.background='';
-    g.style.transition='transform .15s ease-out'; g.style.transform='scaleX(1)';
-    setTimeout(()=>onDone?.(),160);
-  },160);
-}
-// Flip a ghost from face-down to face-up in place (scaleX), revealing `card`; then onDone
-function ghostFlipUp(g,card,onDone){
-  if(!g){onDone?.();return;}
-  g.style.transition='transform .15s ease-in'; g.style.transform='scaleX(0)';
-  setTimeout(()=>{
-    g.className='card-3d card-front'; g.style.background='#f5f0e8';
-    g.innerHTML=`<img src="/cards/${card.suit}_${card.value}.jpg" class="card-img">`;
-    g.style.transition='transform .15s ease-out'; g.style.transform='scaleX(1)';
-    setTimeout(()=>onDone?.(),160);
-  },160);
-}
-
-// ── flyAnim: reparent the actual element to body, animate it to destination ──
+// ── flyAnim: used only for swap panel (reparents actual element) ──────────
 function flyAnim(fromEl, toEl) {
   if(!fromEl||!toEl)return;
   try{
@@ -839,16 +800,8 @@ function flyAnim(fromEl, toEl) {
   },680);
   }catch(e){ S._skipDiscard=false; try{fromEl.remove();}catch(_){} }
 }
-// Deck draw: a face-down card flies from the deck to the drawn-slot, then flips
-// face-up to reveal the card you drew. `card` null = penalized (stays face-down).
 function animDeckDraw(card, onArrive) {
-  const dk=$('deck-pile'); const slot=$('drawn-slot');
-  const fr=dk?.getBoundingClientRect(); const tr=slot?.getBoundingClientRect();
-  if(!fr||!tr||tr.width<4){ onArrive?.(); return; }
-  flyGhost(fr, tr, { dur:430, z:9995, onLand:(g)=>{
-    if(card){ ghostFlipUp(g, card, ()=>{ onArrive?.(); g?.remove(); }); }
-    else { onArrive?.(); g?.remove(); }
-  }});
+  Cards.drawFromDeck(card, onArrive);
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
@@ -1009,17 +962,7 @@ socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
     if(S.privateState?.hand?.[serverIndex]) S.privateState.hand[serverIndex]={...card,known:true,index:serverIndex};
     S._tempRevealServerIdx=serverIndex;
     renderMyHand();
-    const vi=(S.handOrder||[]).findIndex(si=>si===serverIndex);
-    if(vi>=0){
-      const el=$('my-hand').querySelectorAll('.card-3d')[vi];
-      flipCardUp(el,card);
-      setTimeout(()=>{
-        S._tempRevealServerIdx=null;
-        const ce=$('my-hand').querySelectorAll('.card-3d')[vi];
-        flipCardDown(ce);
-        setTimeout(()=>renderMyHand(),550);
-      },2800);
-    }
+    setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); }, 2500);
     addLog(`🔟 Hai pescato: ${card.label}${card.symbol} — ricordala!`,'gold');
   },820);
 });
@@ -1027,23 +970,13 @@ socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
 socket.on('game:peeked',({cardIndex,card})=>{
   if(S.privateState?.hand?.[cardIndex]) S.privateState.hand[cardIndex]={...card,known:true,index:cardIndex};
   renderScore();
-  // Find which visual position corresponds to this server index and flip it up in-hand
   const vi=(S.handOrder||[]).findIndex(si=>si===cardIndex);
-  if(vi>=0){
-    S._tempRevealServerIdx=cardIndex;
-    renderMyHand(); // shows card face-up
-    // Flip the specific card element with animation
-    const el=$('my-hand').querySelectorAll('.card-3d')[vi];
-    flipCardUp(el,card);
-    // Cover after 3s
-    setTimeout(()=>{
-      S._tempRevealServerIdx=null;
-      const coverEl=$('my-hand').querySelectorAll('.card-3d')[vi];
-      flipCardDown(coverEl);
-      setTimeout(()=>renderMyHand(),550);
-    },3000);
-  }
-  addLog(`👁 Posizione #${vi+1}: ricordatela!`,'gold');
+  // _tempRevealServerIdx drives renderMyHand to show the card face-up.
+  // No direct DOM flip — renderMyHand handles it cleanly on every re-render.
+  S._tempRevealServerIdx=cardIndex;
+  renderMyHand();
+  setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); }, 3000);
+  addLog(`👁 Posizione #${vi>=0?vi+1:'?'}: ricordatela!`,'gold');
 });
 
 socket.on('game:swapped',({receivedCard})=>{
@@ -1378,56 +1311,39 @@ const SFX = {
 
 // ── Opponent animation helpers ────────────────────────────────────────────
 
-// Opponent draws: a full-size card flies from the deck to their seat, shrinking to
-// mini size. The destination mini-card stays hidden until the ghost lands (no pre-pop).
 function animOppDraw(userId) {
-  const dk=$('deck-pile');
-  if (!dk){ S._drawingSet?.delete(userId); return; }
+  const deckRect = Cards.rect(document.getElementById('deck-pile'));
+  if (!deckRect){ S._drawingSet?.delete(userId); return; }
   SFX.play('Card', 0.35);
-  const fr=dk.getBoundingClientRect();
-  // Launch AFTER renderSeats has run (checkOppCardChanges runs before renderBoard),
-  // so the reserved 'mini-incoming' slot exists and we can target it precisely.
+  // Wait one frame so renderSeats has injected the .mini-incoming slot
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
-    if(!seat){ S._drawingSet?.delete(userId); return; }
-    const tgt=seat.querySelector('.mini-card.mini-incoming')||seat.querySelector('.seat-cards')||seat;
-    const tr=tgt.getBoundingClientRect();
-    flyGhost(fr, tr, { toW:28, toH:43, dur:500, z:9990, onLand:(g)=>{
-      g?.remove();
+    const seat = document.querySelector('.seat[data-user-id="'+userId+'"]');
+    if (!seat){ S._drawingSet?.delete(userId); return; }
+    const tgt  = seat.querySelector('.mini-card.mini-incoming') || seat.querySelector('.seat-cards') || seat;
+    const seatR = tgt.getBoundingClientRect();
+    Cards.oppDraw(deckRect, seatR, ()=>{
       S._drawingSet?.delete(userId);
-      const s=document.querySelector('.seat[data-user-id="'+userId+'"]');
-      const mc=s?.querySelector('.mini-card.mini-incoming');
-      if(mc){ mc.classList.remove('mini-incoming'); mc.classList.add('card-new-pop'); }
-    }});
+      const s  = document.querySelector('.seat[data-user-id="'+userId+'"]');
+      const mc = s?.querySelector('.mini-card.mini-incoming');
+      if (mc){ mc.classList.remove('mini-incoming'); mc.classList.add('card-new-pop'); }
+    });
   }));
 }
 
-// Opponent discards: flip face-up at seat, scale up to pile size
 function animOppDiscard(userId, card) {
-  const seat=document.querySelector('.seat[data-user-id="'+userId+'"]');
-  const dp=$('discard-pile');
-  if (!seat||!dp) return;
+  const seat = document.querySelector('.seat[data-user-id="'+userId+'"]');
+  const pile = document.getElementById('discard-pile');
+  if (!seat || !pile) return;
   SFX.play('Card', 0.4);
-  S._skipDiscard=true;
-  const sr=seat.getBoundingClientRect(), dr=dp.getBoundingClientRect();
-  const st=getComputedStyle(document.documentElement);
-  const tw=parseInt(st.getPropertyValue('--cw'))||66, th=parseInt(st.getPropertyValue('--ch'))||100;
-  const mw=28, mh=43;
-  const g=document.createElement('div');
-  g.className='card-3d card-back';
-  g.style.cssText='position:fixed;left:'+(sr.left+sr.width/2-mw/2)+'px;top:'+(sr.top+sr.height/2-mh/2)+'px;width:'+mw+'px;height:'+mh+'px;z-index:9995;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.55);border-radius:3px;overflow:hidden;transition:none';
-  document.body.appendChild(g);
-  g.style.transition='transform 0.18s ease-in'; g.style.transform='scaleX(0)';
-  setTimeout(()=>{
-    if(card){ g.className='card-3d card-front'; g.style.background='#f5f0e8'; g.innerHTML='<img src="/cards/'+card.suit+'_'+card.value+'.jpg" class="card-img">'; }
-    g.style.transition='transform 0.18s ease-out'; g.style.transform='scaleX(1)';
-    setTimeout(()=>{
-      g.style.transition='left 480ms cubic-bezier(.25,.46,.45,.94),top 480ms cubic-bezier(.25,.46,.45,.94),width 480ms cubic-bezier(.25,.46,.45,.94),height 480ms cubic-bezier(.25,.46,.45,.94),border-radius 480ms';
-      g.style.left=(dr.left+dr.width/2-tw/2)+'px'; g.style.top=(dr.top+dr.height/2-th/2)+'px';
-      g.style.width=tw+'px'; g.style.height=th+'px'; g.style.borderRadius='6px';
-      setTimeout(()=>{ g.remove(); S._skipDiscard=false; const c=S._pendingDiscardCard||S.gameState&&S.gameState.discardTop; S._pendingDiscardCard=null; if(c) renderDiscardPile(c); }, 560);
-    }, 200);
-  }, 190);
+  S._skipDiscard = true;
+  const seatRect = seat.getBoundingClientRect();
+  const pileRect = pile.getBoundingClientRect();
+  Cards.oppDiscard(seatRect, pileRect, card, ()=>{
+    S._skipDiscard = false;
+    const c = S._pendingDiscardCard || S.gameState?.discardTop;
+    S._pendingDiscardCard = null;
+    if (c) renderDiscardPile(c);
+  });
 }
 
 // ── Track opponent card counts to detect draws ────────────────────────────
