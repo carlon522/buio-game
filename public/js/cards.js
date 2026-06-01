@@ -1,13 +1,19 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════════
-//  BUIO — Card Animation Engine
-//  All card movement goes through here.  One rule: a card is ALWAYS visible.
-//  It never disappears and reappears.  It travels from A to B.
+//  BUIO — Card Animation Engine  v2
+//
+//  RULE: every ghost travels face-DOWN from A to B.
+//  The destination (drawn-slot, discard pile, hand slot) renders the card
+//  face-up once the ghost lands — that is the reveal. No in-flight flips.
+//
+//  The single exception: discardDrawnCard — the drawn card is already
+//  face-up in the drawn-slot so the ghost stays face-up as it moves.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Cards = (() => {
-  // ── helpers ────────────────────────────────────────────────────────────
-  function css() {
+
+  // ── CSS vars ──────────────────────────────────────────────────────────────
+  function cardSize() {
     const s = getComputedStyle(document.documentElement);
     return {
       cw: parseInt(s.getPropertyValue('--cw')) || 66,
@@ -15,6 +21,7 @@ const Cards = (() => {
     };
   }
 
+  // ── rect helper: returns null for zero-size or missing elements ───────────
   function rect(el) {
     if (!el) return null;
     const r = el.getBoundingClientRect();
@@ -24,17 +31,17 @@ const Cards = (() => {
 
   const EASE = 'cubic-bezier(.25,.46,.45,.94)';
 
-  // ── Core: create a flying ghost card ────────────────────────────────────
-  // from  : DOMRect of start position
-  // to    : DOMRect of end position
-  // opts  : { faceUp, card, toW, toH, dur, z, onLand }
+  // ── Core: fly a ghost from A to B ─────────────────────────────────────────
+  // opts: { faceUp, card, toW, toH, dur, z, onLand }
+  // onLand(ghost) fires dur+30ms after creation.
   function fly(from, to, opts = {}) {
     if (!from || !to) { opts.onLand?.(null); return null; }
-    const { cw, ch } = css();
-    const dur  = opts.dur  ?? 420;
-    const toW  = opts.toW  ?? cw;
-    const toH  = opts.toH  ?? ch;
-    const z    = opts.z    ?? 9990;
+
+    const { cw, ch } = cardSize();
+    const dur = opts.dur ?? 420;
+    const toW = opts.toW ?? cw;
+    const toH = opts.toH ?? ch;
+    const z   = opts.z   ?? 9990;
 
     const g = document.createElement('div');
     if (opts.faceUp && opts.card) {
@@ -45,18 +52,18 @@ const Cards = (() => {
       g.className = 'card-3d card-back';
     }
     Object.assign(g.style, {
-      position: 'fixed',
-      left:   from.left + 'px',
-      top:    from.top  + 'px',
-      width:  from.width  + 'px',
-      height: from.height + 'px',
-      zIndex: String(z),
-      margin: '0',
+      position:      'fixed',
+      left:          from.left   + 'px',
+      top:           from.top    + 'px',
+      width:         from.width  + 'px',
+      height:        from.height + 'px',
+      zIndex:        String(z),
+      margin:        '0',
       pointerEvents: 'none',
-      overflow: 'hidden',
-      borderRadius: '6px',
-      boxShadow: '0 8px 24px rgba(0,0,0,.6)',
-      transition: 'none',
+      overflow:      'hidden',
+      borderRadius:  '6px',
+      boxShadow:     '0 8px 24px rgba(0,0,0,.6)',
+      transition:    'none',
     });
     document.body.appendChild(g);
 
@@ -80,125 +87,58 @@ const Cards = (() => {
     return g;
   }
 
-  // Flip a ghost in-place: face-down → face-up
-  // Waits for the card image before revealing so it never flips open blank.
-  // ONE-SHOT guard: doFlip can only run once regardless of which path fires first.
-  function flipUp(g, card, onDone) {
-    if (!g) { onDone?.(); return; }
-    const img = new Image();
-    img.className = 'card-img';
-    img.src = `/cards/${card.suit}_${card.value}.jpg`;
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
-    let fired = false;
-    const doFlip = () => {
-      if (fired) return; fired = true;
-      g.style.transition = 'transform .12s ease-in';
-      g.style.transform  = 'scaleX(0)';
-      setTimeout(() => {
-        g.className        = 'card-3d card-front';
-        g.style.background = '#f5f0e8';
-        g.innerHTML        = '';
-        g.appendChild(img);
-        g.style.transition = 'transform .12s ease-out';
-        g.style.transform  = 'scaleX(1)';
-        setTimeout(() => onDone?.(), 130);
-      }, 130);
-    };
-
-    if (img.complete) {
-      doFlip();
-    } else {
-      img.onload  = doFlip;
-      img.onerror = doFlip;
-      setTimeout(doFlip, 300); // safety — now guarded by `fired`
-    }
-  }
-
-  // Flip a ghost in-place: face-up → face-down
-  function flipDown(g, onDone) {
-    if (!g) { onDone?.(); return; }
-    g.style.transition = 'transform .12s ease-in';
-    g.style.transform  = 'scaleX(0)';
-    setTimeout(() => {
-      g.className        = 'card-3d card-back';
-      g.innerHTML        = '';
-      g.style.background = '';
-      g.style.transition = 'transform .12s ease-out';
-      g.style.transform  = 'scaleX(1)';
-      setTimeout(() => onDone?.(), 130);
-    }, 130);
-  }
-
-  // ── Public moves ────────────────────────────────────────────────────────
-
-  // Helper: best rect for the drawn card — the card-3d inside drawn-card-display,
-  // or fall back to the drawn-slot container if the card isn't rendered yet.
+  // Rect of the actual card-3d inside drawn-card-display (not the outer slot container)
   function drawnCardRect() {
     const card3d = document.querySelector('#drawn-card-display .card-3d');
     return rect(card3d) || rect(document.getElementById('drawn-slot'));
   }
 
-  // Helper: rect of the last (rightmost) mini-card in the seat —
-  // the one most recently added, so ghosts start from the right card.
+  // Rect of the last (rightmost) visible mini-card in an opponent seat
   function seatCardsRect(seat) {
+    if (!seat) return null;
     const cards = Array.from(seat.querySelectorAll('.mini-card:not(.mini-incoming)'));
-    const last = cards[cards.length - 1];
+    const last  = cards[cards.length - 1];
     return rect(last) || rect(seat.querySelector('.seat-cards')) || rect(seat);
   }
 
-  // 1. DRAW: deck → drawn-card-display (the exact card area, not the wider slot container).
-  //    Pre-loads the card image so it's ready before the flip reveal.
-  function drawFromDeck(card, onDone) {
+  // ── Public moves ─────────────────────────────────────────────────────────
+
+  // 1. DRAW: deck → drawn-slot  (face-down ghost; onDone reveals the drawn card)
+  function drawFromDeck(onDone) {
     const dk   = rect(document.getElementById('deck-pile'));
-    // Target the card-3d inside drawn-card-display for pixel-perfect alignment.
     const slot = drawnCardRect() || rect(document.getElementById('drawn-slot'));
     if (!dk || !slot) { onDone?.(); return; }
-
-    // Pre-load image immediately so it's cached by the time the ghost flips
-    if (card) {
-      const preload = new Image();
-      preload.src = `/cards/${card.suit}_${card.value}.jpg`;
-    }
-
-    const g = fly(dk, slot, { dur: 380, z: 9995 });
-    if (!g) return;
-    if (card) {
-      setTimeout(() => flipUp(g, card, () => { g.remove(); onDone?.(); }), 420);
-    } else {
-      setTimeout(() => { g.remove(); onDone?.(); }, 420);
-    }
+    fly(dk, slot, {
+      dur: 380, z: 9995,
+      onLand: g => { g.remove(); onDone?.(); },
+    });
   }
 
-  // 2. DISCARD HAND CARD (normal turn): hand-slot → pile, drawn-card → right end
-  //    The drawn card goes to the RIGHTMOST slot so the player sees it arrive there.
-  //    Returns nothing — caller must pass callbacks in opts.
-  //    opts: { handSlotRect, pileRect, drawnSlotRect, drawnCard,
-  //            lastSlotRect, onPileLand, onHandLand }
+  // 2. DISCARD HAND CARD: discarded → pile, drawn → rightmost slot (both face-down)
+  //    opts: { handSlotRect, pileRect, drawnSlotRect, lastSlotRect, onPileLand, onHandLand }
   function discardHandCard(opts) {
     const { handSlotRect, pileRect, drawnSlotRect, lastSlotRect } = opts;
 
-    // Ghost A: hand card → pile, face-down
-    const gA = fly(handSlotRect, pileRect, {
+    // Ghost A: discarded card → pile
+    fly(handSlotRect, pileRect, {
       dur: 420, z: 9999,
       onLand: g => { g.remove(); opts.onPileLand?.(); },
     });
 
-    // Ghost B: drawn card → last hand slot, face-down
-    // Starts immediately alongside Ghost A — viewer sees both move at once.
+    // Ghost B: drawn card → rightmost slot (simultaneous with A)
     if (drawnSlotRect && lastSlotRect) {
       fly(drawnSlotRect, lastSlotRect, {
         dur: 420, z: 9998,
         onLand: g => { g.remove(); opts.onHandLand?.(); },
       });
     } else {
-      // No drawn-slot visible — just finalise
       setTimeout(() => opts.onHandLand?.(), 460);
     }
-
-    return gA;
   }
 
-  // 3. DISCARD DRAWN CARD: drawn-slot → pile, face-up
+  // 3. DISCARD DRAWN CARD: drawn-slot → pile  (face-UP — card was already visible)
   function discardDrawnCard(opts) {
     const { drawnSlotRect, pileRect, card } = opts;
     if (!drawnSlotRect || !pileRect) { opts.onLand?.(); return; }
@@ -209,8 +149,8 @@ const Cards = (() => {
     });
   }
 
-  // 4. FORCED DISCARD: hand-slot → pile, replacement from deck → same slot
-  //    opts: { handSlotRect, pileRect, deckRect, onPileLand, onDeckLand }
+  // 4. FORCED DISCARD: discarded → pile, replacement from deck → same slot (both face-down)
+  //    opts: { handSlotRect, pileRect, deckRect, targetSlotRect, onPileLand, onDeckLand }
   function forcedDiscard(opts) {
     const { handSlotRect, pileRect, deckRect, targetSlotRect } = opts;
 
@@ -229,16 +169,16 @@ const Cards = (() => {
     }
   }
 
-  // 5. ATTACK: hand-slot → pile
+  // 5. ATTACK: hand-slot → pile  (face-down)
   function attackCard(handSlotRect, pileRect, onLand) {
+    if (!handSlotRect || !pileRect) { onLand?.(); return; }
     fly(handSlotRect, pileRect, {
       dur: 380, z: 9999,
       onLand: g => { g.remove(); onLand?.(); },
     });
   }
 
-  // 6. OPPONENT DRAW: deck (full size) → seat (mini size)
-  //    Caller must show the mini card only after onLand fires.
+  // 6. OPPONENT DRAW: deck (full size) → seat mini-card slot (shrinks during flight)
   function oppDraw(deckRect, seatRect, onLand) {
     if (!deckRect || !seatRect) { onLand?.(); return; }
     fly(deckRect, seatRect, {
@@ -247,52 +187,28 @@ const Cards = (() => {
     });
   }
 
-  // 7. OPPONENT DISCARD: seat mini-cards → pile (full size), face-up in flight.
-  //    Pre-loads the image so the ghost doesn't show blank at the seat.
-  function oppDiscard(seat, pileRect, card, onLand) {
-    const seatRect = seat ? seatCardsRect(seat) : null;
+  // 7. OPPONENT DISCARD: seat → pile  (face-down; renderDiscardPile shows card on land)
+  function oppDiscard(seat, pileRect, onLand) {
+    const seatRect = seatCardsRect(seat);
     if (!seatRect || !pileRect) { onLand?.(); return; }
-    const { cw, ch } = css();
-
-    const doFly = () => fly(seatRect, pileRect, {
-      faceUp: !!card, card,
+    const { cw, ch } = cardSize();
+    fly(seatRect, pileRect, {
       toW: cw, toH: ch, dur: 460, z: 9995,
       onLand: g => { g?.remove(); onLand?.(); },
     });
-
-    if (card) {
-      const img = new Image();
-      img.src = `/cards/${card.suit}_${card.value}.jpg`;
-      let fired = false;
-      const once = () => { if (!fired) { fired = true; doFly(); } };
-      if (img.complete) { once(); }
-      else { img.onload = once; img.onerror = once; setTimeout(once, 200); }
-    } else {
-      doFly();
-    }
   }
 
-  // 8. SWAP: two rects cross each other (card 8 special)
+  // 8. SWAP: two rects cross each other
   function swap(rectA, rectB, onDone) {
     if (!rectA || !rectB) { onDone?.(); return; }
-    const dur = 600;
-    fly(rectA, rectB, { dur, z: 9992, onLand: g => g?.remove() }); // must remove, was leaking
+    const dur = 550;
+    fly(rectA, rectB, { dur, z: 9992, onLand: g => g?.remove() });
     fly(rectB, rectA, { dur, z: 9991, onLand: g => { g?.remove(); onDone?.(); } });
   }
 
-  // 9. PEEK: flip a specific hand card element face-up in place, then back down
-  //    el: the actual .card-3d element in the hand
-  function peekCard(el, card, holdMs, onDone) {
-    if (!el) { onDone?.(); return; }
-    // We work on the real element (it's already in the hand DOM)
-    flipUp(el, card, () => {
-      setTimeout(() => flipDown(el, onDone), holdMs ?? 2800);
-    });
-  }
-
-  return { fly, flipUp, flipDown, rect, css,
-           drawnCardRect, seatCardsRect,
-           drawFromDeck, discardHandCard, discardDrawnCard,
-           forcedDiscard, attackCard, oppDraw, oppDiscard,
-           swap, peekCard };
+  return {
+    fly, rect, cardSize, drawnCardRect, seatCardsRect,
+    drawFromDeck, discardHandCard, discardDrawnCard,
+    forcedDiscard, attackCard, oppDraw, oppDiscard, swap,
+  };
 })();

@@ -366,25 +366,6 @@ $('btn-ready').addEventListener('click',()=>{
   socket.emit('game:ready');$('btn-ready').disabled=true;$('btn-ready').textContent='In attesa degli altri…';
 });
 
-// Flip a card element down (face-down) with animation
-function flipCardDown(el){
-  if(!el) return;
-  el.style.transition='transform .25s ease-in';
-  el.style.transform='scaleX(0)';
-  setTimeout(()=>{
-    el.className='card-3d card-back';
-    el.innerHTML='';
-    el.style.transition='transform .25s ease-out';
-    el.style.transform='scaleX(1)';
-    setTimeout(()=>{ el.style.transform=''; el.style.transition=''; },280);
-  },250);
-}
-
-// flipCardUp: kept for compatibility — not used in main game flow
-function flipCardUp(el, card){
-  if(!el||!card) return;
-  Cards.flipUp(el, card, ()=>{ el.style.transform=''; el.style.transition=''; });
-}
 
 // ── Board ─────────────────────────────────────────────────────────────────
 function renderBoard() {
@@ -797,8 +778,8 @@ function flyAnim(fromEl, toEl) {
   },680);
   }catch(e){ S._skipDiscard=false; try{fromEl.remove();}catch(_){} }
 }
-function animDeckDraw(card, onArrive) {
-  Cards.drawFromDeck(card, onArrive);
+function animDeckDraw(onArrive) {
+  Cards.drawFromDeck(onArrive);
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
@@ -836,12 +817,11 @@ socket.on('game:drawn-card',({card,penalized})=>{
   }
   SFX.play('Card', 0.55);
   renderMyHand();renderActions();renderTurnBanner();
-  // Keep the real drawn-slot content hidden until the flying card flips up onto it
+  // Ghost flies face-down deck→slot; when it lands, drawn-slot fades in face-up
   const _dcd=$('drawn-card-display');
   if(_dcd) _dcd.style.opacity='0';
-  const reveal = (penalized||!card) ? null : card;
-  requestAnimationFrame(()=>animDeckDraw(reveal,()=>{
-    if(_dcd){ _dcd.style.transition='opacity .12s'; _dcd.style.opacity='1'; }
+  requestAnimationFrame(()=>animDeckDraw(()=>{
+    if(_dcd){ _dcd.style.transition='opacity .15s'; _dcd.style.opacity='1'; }
   }));
 });
 
@@ -1334,9 +1314,8 @@ function animOppDiscard(userId, card) {
   SFX.play('Card', 0.4);
   S._skipDiscard = true;
   const pileRect = pile.getBoundingClientRect();
-  // Pass the seat element; Cards.oppDiscard uses seatCardsRect() to target
-  // the mini-card area precisely rather than the whole seat container.
-  Cards.oppDiscard(seat, pileRect, card, ()=>{
+  // Ghost travels face-down; renderDiscardPile shows the card face-up on land
+  Cards.oppDiscard(seat, pileRect, ()=>{
     S._skipDiscard = false;
     const c = S._pendingDiscardCard || S.gameState?.discardTop;
     S._pendingDiscardCard = null;
