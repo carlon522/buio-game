@@ -598,7 +598,7 @@ function onHandClick(visualIdx) {
     // Capture rects BEFORE any DOM change
     const handSlotRect = cardEl.getBoundingClientRect();
     const pileRect     = Cards.rect($('discard-pile'));
-    const drawnSlotRect= Cards.rect($('drawn-slot'));
+    const drawnSlotRect= Cards.drawnCardRect(); // rect of the actual card-3d, not the container
     const drawnCard    = S.drawnCard;
 
     // New card goes to the RIGHT END visually (easy to track)
@@ -748,7 +748,7 @@ function animateCardSwap(fromVI, toVI) {
 function discardDrawn() {
   SFX.play('Card', 0.5);
   // Capture rects BEFORE hiding the slot (hidden elements have zero rect)
-  const drawnSlotRect = Cards.rect($('drawn-slot'));
+  const drawnSlotRect = Cards.drawnCardRect(); // rect of the card-3d inside drawn-slot
   const pileRect      = Cards.rect($('discard-pile'));
   const card          = S.drawnCard?.known ? S.drawnCard : null;
   S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
@@ -1336,9 +1336,10 @@ function animOppDiscard(userId, card) {
   if (!seat || !pile) return;
   SFX.play('Card', 0.4);
   S._skipDiscard = true;
-  const seatRect = seat.getBoundingClientRect();
   const pileRect = pile.getBoundingClientRect();
-  Cards.oppDiscard(seatRect, pileRect, card, ()=>{
+  // Pass the seat element; Cards.oppDiscard uses seatCardsRect() to target
+  // the mini-card area precisely rather than the whole seat container.
+  Cards.oppDiscard(seat, pileRect, card, ()=>{
     S._skipDiscard = false;
     const c = S._pendingDiscardCard || S.gameState?.discardTop;
     S._pendingDiscardCard = null;

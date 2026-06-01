@@ -112,10 +112,23 @@ const Cards = (() => {
 
   // ── Public moves ────────────────────────────────────────────────────────
 
-  // 1. DRAW: deck → drawn-slot.  Ghost reveals the card on arrival.
+  // Helper: best rect for the drawn card — the card-3d inside drawn-card-display,
+  // or fall back to the drawn-slot container if the card isn't rendered yet.
+  function drawnCardRect() {
+    const card3d = document.querySelector('#drawn-card-display .card-3d');
+    return rect(card3d) || rect(document.getElementById('drawn-slot'));
+  }
+
+  // Helper: best rect for the opponent mini-cards area inside a seat
+  function seatCardsRect(seat) {
+    return rect(seat.querySelector('.seat-cards')) || rect(seat);
+  }
+
+  // 1. DRAW: deck → drawn-card-display (the exact card area, not the wider slot container).
   function drawFromDeck(card, onDone) {
     const dk   = rect(document.getElementById('deck-pile'));
-    const slot = rect(document.getElementById('drawn-slot'));
+    // Target the card-3d inside drawn-card-display for pixel-perfect alignment.
+    const slot = drawnCardRect() || rect(document.getElementById('drawn-slot'));
     if (!dk || !slot) { onDone?.(); return; }
     const g = fly(dk, slot, { dur: 380, z: 9995 });
     if (!g) return;
@@ -204,9 +217,9 @@ const Cards = (() => {
     });
   }
 
-  // 7. OPPONENT DISCARD: seat (mini) → pile (full), with face-up reveal in transit
-  //    card must be provided to show face-up.
-  function oppDiscard(seatRect, pileRect, card, onLand) {
+  // 7. OPPONENT DISCARD: seat mini-cards area → pile (full), flip face-up on arrival.
+  function oppDiscard(seat, pileRect, card, onLand) {
+    const seatRect = seat ? seatCardsRect(seat) : null;
     if (!seatRect || !pileRect) { onLand?.(); return; }
     const { cw, ch } = css();
     // Start mini at seat, grow to full as it flies
@@ -241,6 +254,7 @@ const Cards = (() => {
   }
 
   return { fly, flipUp, flipDown, rect, css,
+           drawnCardRect, seatCardsRect,
            drawFromDeck, discardHandCard, discardDrawnCard,
            forcedDiscard, attackCard, oppDraw, oppDiscard,
            swap, peekCard };
