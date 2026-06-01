@@ -221,22 +221,17 @@ const Cards = (() => {
   }
 
   // 7. OPPONENT DISCARD: seat mini-cards → pile (full size).
-  //    The ghost flips face-up mid-flight so everyone sees the card travelling.
-  //    No second flip at landing — renderDiscardPile just shows the card.
+  //    Ghost starts face-up at the seat and grows to full card size as it flies.
+  //    (Mid-flight flipUp was broken — it overwrites the ongoing position transition.)
   function oppDiscard(seat, pileRect, card, onLand) {
     const seatRect = seat ? seatCardsRect(seat) : null;
     if (!seatRect || !pileRect) { onLand?.(); return; }
     const { cw, ch } = css();
-    const dur = 460;
-
-    // Ghost starts face-down (mini), flips face-up once airborne, arrives face-up
-    const g = fly(seatRect, pileRect, { toW: cw, toH: ch, dur, z: 9995,
-      onLand: g2 => { g2?.remove(); onLand?.(); },
+    fly(seatRect, pileRect, {
+      faceUp: !!card, card,
+      toW: cw, toH: ch, dur: 460, z: 9995,
+      onLand: g => { g?.remove(); onLand?.(); },
     });
-    if (g && card) {
-      // Flip face-up at ~40% of the journey (180ms in)
-      setTimeout(() => flipUp(g, card, () => {}), 180);
-    }
   }
 
   // 8. SWAP: two rects cross each other (card 8 special)
