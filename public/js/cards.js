@@ -1,28 +1,24 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════════════
-//  BUIO — Card Physics Engine
+//  BUIO — Card Physics Engine (GSAP-powered)
 //
-//  Frame-by-frame physics animation using requestAnimationFrame.
-//  No CSS transitions. Every ghost has:
-//    • Parabolic arc  (card rises/falls naturally mid-flight)
-//    • Rotation       (card tilts/spins as it travels)
-//    • Size lerp      (for opponent cards shrinking/growing)
-//    • Easing curve   (smooth acceleration/deceleration)
+//  Uses GSAP 3 for 60fps tweening.
+//  Each card flight is three parallel GSAP tweens:
+//    1. X position  — smooth ease
+//    2. Y position  — parabolic arc (rises/falls naturally)
+//    3. Rotation    — peaks at midpoint, settles to 0
+//  Plus optional size lerp for scaling cards to/from mini seats.
 //
-//  All ghosts are face-down. No in-flight flips.
-//  Special card reveals (nove9, peek) are handled by renderMyHand state.
+//  All ghosts are face-down (card-back).
+//  No flips, no scaleX, no in-flight reveals.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Cards = (() => {
 
-  // ── Easing ────────────────────────────────────────────────────────────────
-  function easeOut(t)   { return 1 - Math.pow(1 - t, 3); }
-  function easeInOut(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+  // ── helpers ───────────────────────────────────────────────────────────────
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   function cw() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cw')) || 66; }
   function ch() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ch')) || 100; }
-  function lerp(a, b, t) { return a + (b - a) * t; }
 
   function rect(el) {
     if (!el) return null;
@@ -43,196 +39,197 @@ const Cards = (() => {
         || rect(seat);
   }
 
-  // ── Core physics ghost ────────────────────────────────────────────────────
-  //
-  //  from, to  : DOMRect
-  //  p         : physics profile {
-  //    dur       : ms
-  //    z         : z-index
-  //    arc       : px to lift at midpoint (negative = upward arc)
-  //    rotation  : max degrees at peak (returns to 0 at destination)
-  //    toW, toH  : destination size (defaults to card size)
-  //    ease      : easing function
-  //    onLand(g) : callback when animation completes
-  //  }
-  //
-  function fly(from, to, p) {
-    p = p || {};
-    if (!from || !to) { if (p.onLand) p.onLand(null); return null; }
-
-    const toW    = p.toW  || cw();
-    const toH    = p.toH  || ch();
-    const dur    = p.dur  || 420;
-    const z      = p.z    || 9990;
-    const arc    = p.arc  || 0;
-    const rotMax = p.rotation || 0;
-    const easeFn = p.ease || easeOut;
-
-    // Centre points
-    const sx = from.left + from.width  / 2;
-    const sy = from.top  + from.height / 2;
-    const ex = to.left   + to.width    / 2;
-    const ey = to.top    + to.height   / 2;
-
-    // Create ghost
+  // ── Ghost factory ─────────────────────────────────────────────────────────
+  function makeGhost(from, z) {
     const g = document.createElement('div');
     g.className = 'card-3d card-back';
-    g.style.cssText = [
-      'position:fixed',
-      'left:' + from.left + 'px',
-      'top:'  + from.top  + 'px',
-      'width:'  + from.width  + 'px',
-      'height:' + from.height + 'px',
-      'z-index:' + z,
-      'margin:0',
-      'overflow:hidden',
-      'border-radius:6px',
-      'box-shadow:0 8px 28px rgba(0,0,0,.7)',
-      'pointer-events:none',
-      'will-change:transform',
-      'transform-origin:center center',
-    ].join(';');
+    gsap.set(g, {
+      position:      'fixed',
+      left:          from.left,
+      top:           from.top,
+      width:         from.width,
+      height:        from.height,
+      zIndex:        z || 9990,
+      margin:        0,
+      overflow:      'hidden',
+      borderRadius:  '6px',
+      boxShadow:     '0 8px 28px rgba(0,0,0,.7)',
+      pointerEvents: 'none',
+      rotation:      0,
+    });
     document.body.appendChild(g);
-
-    const t0 = performance.now();
-
-    function frame(now) {
-      const raw = Math.min((now - t0) / dur, 1); // 0 → 1 linear
-      const e   = easeFn(raw);                    // eased
-
-      // Position: lerp centres, then offset by half of current size
-      const w = lerp(from.width,  toW, e);
-      const h = lerp(from.height, toH, e);
-      const cx = lerp(sx, ex, e);
-      const cy = lerp(sy, ey, e) + arc * Math.sin(Math.PI * raw); // arc at midpoint
-
-      g.style.left   = (cx - w / 2) + 'px';
-      g.style.top    = (cy - h / 2) + 'px';
-      g.style.width  = w + 'px';
-      g.style.height = h + 'px';
-
-      // Rotation peaks at midpoint, zeroes at destination
-      const rot = rotMax * Math.sin(Math.PI * raw);
-      g.style.transform = rot ? 'rotate(' + rot.toFixed(2) + 'deg)' : '';
-
-      if (raw < 1) {
-        requestAnimationFrame(frame);
-      } else {
-        g.style.transform = '';
-        if (p.onLand) p.onLand(g);
-      }
-    }
-
-    requestAnimationFrame(frame);
     return g;
   }
 
-  // ── Physics profiles ──────────────────────────────────────────────────────
+  // ── Core physics flight ───────────────────────────────────────────────────
+  //
+  //  from, to   : DOMRect
+  //  profile    : {
+  //    dur        : seconds (GSAP uses seconds)
+  //    z          : z-index
+  //    arc        : pixels — negative lifts card upward at midpoint
+  //    rot        : max rotation degrees at midpoint (returns to 0)
+  //    toW, toH   : destination size (defaults to card size)
+  //    onLand(g)  : fires on completion
+  //  }
+  //
+  function fly(from, to, profile) {
+    if (!from || !to) { if (profile.onLand) profile.onLand(null); return null; }
 
-  // Gentle slide out of deck into drawn-slot
-  function DRAW_PROFILE(onLand) {
-    return { dur: 370, z: 9995, arc: 10, rotation: 4, ease: easeOut, onLand };
-  }
+    const toW = profile.toW || cw();
+    const toH = profile.toH || ch();
+    const dur = profile.dur || 0.42;
+    const arc = profile.arc || 0;     // negative = up
+    const rot = profile.rot || 0;
 
-  // Natural throw to discard pile
-  function THROW_PROFILE(onLand) {
-    return { dur: 360, z: 9999, arc: -50, rotation: -14, ease: easeOut, onLand };
-  }
+    // Destination top-left (centred at 'to')
+    const endLeft = to.left + to.width  / 2 - toW / 2;
+    const endTop  = to.top  + to.height / 2 - toH / 2;
 
-  // Smooth slide into hand position
-  function SLIDE_PROFILE(onLand) {
-    return { dur: 400, z: 9998, arc: -15, rotation: 2, ease: easeInOut, onLand };
-  }
+    // Arc peak Y: lift upward by |arc| pixels at midpoint
+    const peakTop = endTop + arc;   // arc is negative for upward lift
 
-  // Aggressive attack throw
-  function ATTACK_PROFILE(onLand) {
-    return { dur: 300, z: 9999, arc: -70, rotation: -20, ease: easeOut, onLand };
-  }
+    const g = makeGhost(from, profile.z);
 
-  // Opponent card shrinking into seat
-  function OPP_DRAW_PROFILE(onLand) {
-    return { dur: 460, z: 9990, arc: -18, rotation: 6, toW: 28, toH: 43, ease: easeOut, onLand };
-  }
+    // Determine when ghost is fully landed (longest tween)
+    let completed = 0;
+    const total = (arc !== 0) ? 3 : 2; // x, y1+y2 (or just y), rotation
+    function check() {
+      completed++;
+      if (completed >= total) { if (profile.onLand) profile.onLand(g); }
+    }
 
-  // Opponent card growing from seat to pile
-  function OPP_DISC_PROFILE(onLand) {
-    return { dur: 400, z: 9995, arc: -40, rotation: -10, ease: easeOut, onLand };
+    // 1. X: smooth ease-out
+    gsap.to(g, { duration: dur, left: endLeft, ease: 'power2.out', onComplete: check });
+
+    // 2. Y: parabolic arc — rise to peak, then fall to destination
+    if (arc !== 0) {
+      const half = dur * 0.48;
+      gsap.to(g, { duration: half, top: peakTop, ease: 'power2.out' });
+      gsap.to(g, { duration: dur - half, top: endTop, ease: 'power2.in', delay: half, onComplete: check });
+    } else {
+      gsap.to(g, { duration: dur, top: endTop, ease: 'power2.out', onComplete: check });
+    }
+
+    // 3. Rotation: peaks at midpoint, returns to 0
+    if (rot !== 0) {
+      const half = dur * 0.5;
+      gsap.to(g, { duration: half, rotation: rot, ease: 'power1.out' });
+      gsap.to(g, { duration: half, rotation: 0,   ease: 'power1.in', delay: half });
+    }
+
+    // 4. Size lerp (for opponent cards scaling)
+    if (profile.toW || profile.toH) {
+      gsap.to(g, { duration: dur, width: toW, height: toH, ease: 'power2.out' });
+    }
+
+    return g;
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  // 1. DRAW: deck → drawn-slot
+  // 1. DRAW: deck peels out, gentle arc into drawn-slot
   function drawFromDeck(onReveal) {
-    var dk   = rect(document.getElementById('deck-pile'));
-    var slot = drawnCardRect() || rect(document.getElementById('drawn-slot'));
+    const dk   = rect(document.getElementById('deck-pile'));
+    const slot = drawnCardRect() || rect(document.getElementById('drawn-slot'));
     if (!dk || !slot) { if (onReveal) onReveal(); return; }
-    fly(dk, slot, DRAW_PROFILE(function(g) { g.remove(); if (onReveal) onReveal(); }));
+    fly(dk, slot, {
+      dur: 0.38, z: 9995,
+      arc: 15,   // slight dip (card slides out under deck)
+      rot: 5,
+      onLand: g => { g.remove(); if (onReveal) onReveal(); },
+    });
   }
 
-  // 2. DISCARD HAND CARD: discarded → pile + drawn → last slot (both simultaneously)
-  //    opts: { handSlotRect, pileRect, drawnSlotRect, lastSlotRect, onPileLand, onHandLand }
+  // 2. DISCARD HAND CARD: thrown to pile + drawn card slides to rightmost slot
   function discardHandCard(opts) {
-    fly(opts.handSlotRect, opts.pileRect,
-      THROW_PROFILE(function(g) { g.remove(); if (opts.onPileLand) opts.onPileLand(); }));
+    // Ghost A: discard → pile, arcing throw
+    fly(opts.handSlotRect, opts.pileRect, {
+      dur: 0.35, z: 9999,
+      arc: -55,  rot: -15,
+      onLand: g => { g.remove(); if (opts.onPileLand) opts.onPileLand(); },
+    });
 
+    // Ghost B: drawn card → last hand slot, controlled slide
     if (opts.drawnSlotRect && opts.lastSlotRect) {
-      fly(opts.drawnSlotRect, opts.lastSlotRect,
-        SLIDE_PROFILE(function(g) { g.remove(); if (opts.onHandLand) opts.onHandLand(); }));
+      fly(opts.drawnSlotRect, opts.lastSlotRect, {
+        dur: 0.40, z: 9998,
+        arc: -12, rot: 3,
+        onLand: g => { g.remove(); if (opts.onHandLand) opts.onHandLand(); },
+      });
     } else {
-      setTimeout(function() { if (opts.onHandLand) opts.onHandLand(); }, 450);
+      setTimeout(() => { if (opts.onHandLand) opts.onHandLand(); }, 450);
     }
   }
 
-  // 3. DISCARD DRAWN CARD: drawn-slot → pile
+  // 3. DISCARD DRAWN CARD: throw to pile face-down
   function discardDrawnCard(opts) {
     if (!opts.drawnSlotRect || !opts.pileRect) { if (opts.onLand) opts.onLand(); return; }
-    fly(opts.drawnSlotRect, opts.pileRect,
-      THROW_PROFILE(function(g) { g.remove(); if (opts.onLand) opts.onLand(); }));
+    fly(opts.drawnSlotRect, opts.pileRect, {
+      dur: 0.35, z: 9999,
+      arc: -55, rot: -15,
+      onLand: g => { g.remove(); if (opts.onLand) opts.onLand(); },
+    });
   }
 
-  // 4. FORCED DISCARD: hand → pile + deck → same slot
+  // 4. FORCED DISCARD: hand → pile + replacement from deck
   function forcedDiscard(opts) {
-    fly(opts.handSlotRect, opts.pileRect,
-      THROW_PROFILE(function(g) { g.remove(); if (opts.onPileLand) opts.onPileLand(); }));
-
+    fly(opts.handSlotRect, opts.pileRect, {
+      dur: 0.35, z: 9999,
+      arc: -55, rot: -15,
+      onLand: g => { g.remove(); if (opts.onPileLand) opts.onPileLand(); },
+    });
     if (opts.deckRect && opts.targetSlotRect) {
-      fly(opts.deckRect, opts.targetSlotRect,
-        SLIDE_PROFILE(function(g) { g.remove(); if (opts.onDeckLand) opts.onDeckLand(); }));
+      fly(opts.deckRect, opts.targetSlotRect, {
+        dur: 0.40, z: 9998,
+        arc: -20, rot: 5,
+        onLand: g => { g.remove(); if (opts.onDeckLand) opts.onDeckLand(); },
+      });
     } else {
-      setTimeout(function() { if (opts.onDeckLand) opts.onDeckLand(); }, 450);
+      setTimeout(() => { if (opts.onDeckLand) opts.onDeckLand(); }, 450);
     }
   }
 
-  // 5. ATTACK: aggressive throw
+  // 5. ATTACK: aggressive throw — fast, high arc, hard spin
   function attackCard(handSlotRect, pileRect, onLand) {
     if (!handSlotRect || !pileRect) { if (onLand) onLand(); return; }
-    fly(handSlotRect, pileRect,
-      ATTACK_PROFILE(function(g) { g.remove(); if (onLand) onLand(); }));
+    fly(handSlotRect, pileRect, {
+      dur: 0.28, z: 9999,
+      arc: -80, rot: -22,
+      onLand: g => { g.remove(); if (onLand) onLand(); },
+    });
   }
 
-  // 6. OPPONENT DRAW: deck (full size) → seat (mini)
+  // 6. OPPONENT DRAW: full-size card shrinks as it enters seat
   function oppDraw(deckRect, seatTargetRect, onLand) {
     if (!deckRect || !seatTargetRect) { if (onLand) onLand(); return; }
-    fly(deckRect, seatTargetRect,
-      OPP_DRAW_PROFILE(function(g) { g.remove(); if (onLand) onLand(); }));
+    fly(deckRect, seatTargetRect, {
+      dur: 0.46, z: 9990,
+      arc: -18, rot: 7,
+      toW: 28, toH: 43,
+      onLand: g => { g.remove(); if (onLand) onLand(); },
+    });
   }
 
-  // 7. OPPONENT DISCARD: seat → pile (grows to full size)
+  // 7. OPPONENT DISCARD: mini grows to full as it arcs to pile
   function oppDiscard(seat, pileRect, onLand) {
-    var from = seatCardsRect(seat);
+    const from = seatCardsRect(seat);
     if (!from || !pileRect) { if (onLand) onLand(); return; }
-    var p = OPP_DISC_PROFILE(function(g) { g.remove(); if (onLand) onLand(); });
-    p.toW = cw(); p.toH = ch();
-    fly(from, pileRect, p);
+    fly(from, pileRect, {
+      dur: 0.40, z: 9995,
+      arc: -42, rot: -11,
+      toW: cw(), toH: ch(),
+      onLand: g => { g.remove(); if (onLand) onLand(); },
+    });
   }
 
-  // 8. SWAP: two cards cross mid-air
+  // 8. SWAP: two cards cross mid-air in opposite arcs
   function swap(rectA, rectB, onDone) {
     if (!rectA || !rectB) { if (onDone) onDone(); return; }
-    fly(rectA, rectB, { dur: 520, z: 9992, arc: -60, rotation:  12, ease: easeInOut,
-      onLand: function(g) { g.remove(); } });
-    fly(rectB, rectA, { dur: 520, z: 9991, arc:  60, rotation: -12, ease: easeInOut,
-      onLand: function(g) { g.remove(); if (onDone) onDone(); } });
+    fly(rectA, rectB, { dur: 0.52, z: 9992, arc: -65,  rot:  14, onLand: g => g.remove() });
+    fly(rectB, rectA, { dur: 0.52, z: 9991, arc:  65,  rot: -14,
+      onLand: g => { g.remove(); if (onDone) onDone(); },
+    });
   }
 
   return {
