@@ -119,9 +119,12 @@ const Cards = (() => {
     return rect(card3d) || rect(document.getElementById('drawn-slot'));
   }
 
-  // Helper: best rect for the opponent mini-cards area inside a seat
+  // Helper: rect of the last (rightmost) mini-card in the seat —
+  // the one most recently added, so ghosts start from the right card.
   function seatCardsRect(seat) {
-    return rect(seat.querySelector('.seat-cards')) || rect(seat);
+    const cards = Array.from(seat.querySelectorAll('.mini-card:not(.mini-incoming)'));
+    const last = cards[cards.length - 1];
+    return rect(last) || rect(seat.querySelector('.seat-cards')) || rect(seat);
   }
 
   // 1. DRAW: deck → drawn-card-display (the exact card area, not the wider slot container).
@@ -239,8 +242,8 @@ const Cards = (() => {
   function swap(rectA, rectB, onDone) {
     if (!rectA || !rectB) { onDone?.(); return; }
     const dur = 600;
-    fly(rectA, rectB, { dur, z: 9992 });
-    fly(rectB, rectA, { dur, z: 9991, onLand: g => { g.remove(); onDone?.(); } });
+    fly(rectA, rectB, { dur, z: 9992, onLand: g => g?.remove() }); // must remove, was leaking
+    fly(rectB, rectA, { dur, z: 9991, onLand: g => { g?.remove(); onDone?.(); } });
   }
 
   // 9. PEEK: flip a specific hand card element face-up in place, then back down

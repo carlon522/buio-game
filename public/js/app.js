@@ -341,15 +341,11 @@ function showPeekOverlay({cards,duration}){
 
 function closePeekInline(){
   clearInterval(S.peekCountdown);
-  const old=new Set(S._peekRevealed||[]);
-  S._peekRevealed=null;
+  S._peekRevealed=null; // clears peek state; renderMyHand will show all cards face-down
   hide($('peek-inline'));
-  // Flip revealed cards back down with animation
-  const handEls=Array.from($('my-hand')?.querySelectorAll('.card-3d')||[]);
-  old.forEach(vi=>{
-    const el=handEls[vi];
-    if(el) flipCardDown(el);
-  });
+  // renderMyHand() is called by game:peek-ended → renderBoard() right after,
+  // so no need for individual DOM flips which would be interrupted anyway.
+  renderMyHand();
 }
 
 socket.on('game:peek',data=>{
@@ -671,8 +667,10 @@ function onHandClick(visualIdx) {
       cardEl.style.transition='transform .18s cubic-bezier(.34,1.2,.64,1),box-shadow .18s';
       cardEl.style.transform='translateY(-12px) scale(1.06)';
       cardEl.style.boxShadow='0 0 0 3px var(--gold),0 10px 24px rgba(0,0,0,.65)';
+      // Block pile render immediately so game:card-discarded can't update
+      // the pile before the attack ghost arrives
+      S._skipDiscard=true;
       setTimeout(()=>{
-        S._skipDiscard=true;
         Cards.attackCard(slotR, pileR, ()=>{
           S._skipDiscard=false;
           const c=S._pendingDiscardCard||S.gameState?.discardTop;
