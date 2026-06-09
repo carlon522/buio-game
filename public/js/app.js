@@ -103,6 +103,30 @@ function renderDiscardPile(c) {
     onerror="this.style.display='none';makeFB(this.parentElement,'${c.label}','${c.symbol}','${fb}')">`;
 }
 
+function settleDiscardPile(card) {
+  clearTimeout(S._skipDiscardFallback);
+  S._skipDiscard=false;
+  const c=card||S._pendingDiscardCard||S.gameState?.discardTop;
+  S._pendingDiscardCard=null;
+  if(c) renderDiscardPile(c);
+}
+
+function resetMotionState() {
+  clearTimeout(S._skipDiscardFallback);
+  S._skipDiscard=false;
+  S._pendingDiscardCard=null;
+  S._animSlot=null;
+  S._attackMode=false;
+  S._attackAnnouncer=null;
+  $('discard-pile')?.classList.remove('atk-target');
+}
+
+function knownHandCardAtVisual(visualIdx) {
+  const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
+  const card=S.privateState?.hand?.[serverIdx];
+  return card?.known ? {...card,known:true} : null;
+}
+
 // ── Seat positions (trigonometry) ─────────────────────────────────────────
 function getOppPosition(idx, total) {
   const rx=43, ry=37;
@@ -207,7 +231,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null;S._animSlot=null;S._skipDiscard=false; }
+  if(S._attackRevealActive){ S._attackRevealActive=false; resetMotionState(); }
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
@@ -571,12 +595,16 @@ function onHandClick(visualIdx) {
     const handSlotRect  = cardEl.getBoundingClientRect();
     const pileRect      = Cards.rect($('discard-pile'));
     const drawnSlotRect = Cards.drawnCardRect();
+    const discardCard   = knownHandCardAtVisual(visualIdx);
+    const drawnCard     = S.drawnCard?.known ? {...S.drawnCard,known:true} : null;
 
     // Server replaces in-place (hand[serverIdx] = drawnCard).
     // Client keeps handOrder UNCHANGED — the drawn card fills the exact same slot.
     // No other card shifts position. Memory game preserved.
     S._skipDiscard = true;
     S._animSlot    = visualIdx;   // hide this slot during animation
+    clearTimeout(S._skipDiscardFallback);
+    S._skipDiscardFallback=setTimeout(()=>{ S._animSlot=null; settleDiscardPile(); renderMyHand(); },1600);
     renderMyHand();
 
     socket.emit('game:discard',{handIndex:serverIdx});
@@ -587,11 +615,10 @@ function onHandClick(visualIdx) {
 
     Cards.discardHandCard({
       handSlotRect, pileRect, drawnSlotRect,
+      discardCard, drawnCard,
       lastSlotRect: targetSlotRect, // drawn card lands in the SAME slot
       onPileLand: ()=>{
-        S._skipDiscard=false;
-        const c=S._pendingDiscardCard||S.gameState?.discardTop;
-        S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+        settleDiscardPile();
       },
       onHandLand: ()=>{
         S._animSlot=null; renderMyHand(); SFX.play('Card',0.18);
@@ -605,10 +632,13 @@ function onHandClick(visualIdx) {
     const handSlotRect = cardEl.getBoundingClientRect();
     const pileRect     = Cards.rect($('discard-pile'));
     const deckRect     = Cards.rect($('deck-pile'));
+    const discardCard  = knownHandCardAtVisual(visualIdx);
 
     // After forced-discard the replacement arrives at the same visual slot
     S._skipDiscard = true;
     S._animSlot    = visualIdx;
+    clearTimeout(S._skipDiscardFallback);
+    S._skipDiscardFallback=setTimeout(()=>{ S._animSlot=null; settleDiscardPile(); renderMyHand(); },1600);
     renderMyHand();
     socket.emit('game:forced-discard',{handIndex:serverIdx});
     S._selIdx=-1;
@@ -617,10 +647,9 @@ function onHandClick(visualIdx) {
 
     Cards.forcedDiscard({
       handSlotRect, pileRect, deckRect, targetSlotRect,
+      discardCard,
       onPileLand: ()=>{
-        S._skipDiscard=false;
-        const c=S._pendingDiscardCard||S.gameState?.discardTop;
-        S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
+        settleDiscardPile();
       },
       onDeckLand: ()=>{
         S._animSlot=null; renderMyHand(); SFX.play('Card',0.18);
@@ -643,11 +672,7 @@ function onHandClick(visualIdx) {
       // the pile before the attack ghost arrives
       S._skipDiscard=true;
       setTimeout(()=>{
-        Cards.attackCard(slotR, pileR, ()=>{
-          S._skipDiscard=false;
-          const c=S._pendingDiscardCard||S.gameState?.discardTop;
-          S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
-        });
+        Cards.attackCard(slotR, pileR, ()=>settleDiscardPile(), knownHandCardAtVisual(visualIdx));
       },200);
     }
     $('discard-pile')?.classList.remove('atk-target');
@@ -724,13 +749,11 @@ function discardDrawn() {
   S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
   socket.emit('game:discard',{handIndex:-1});
   S._skipDiscard=true;
+  clearTimeout(S._skipDiscardFallback);
+  S._skipDiscardFallback=setTimeout(()=>settleDiscardPile(),1500);
   Cards.discardDrawnCard({
     drawnSlotRect, pileRect, card,
-    onLand: ()=>{
-      S._skipDiscard=false;
-      const c=S._pendingDiscardCard||S.gameState?.discardTop;
-      S._pendingDiscardCard=null; if(c) renderDiscardPile(c);
-    },
+    onLand: ()=>settleDiscardPile(),
   });
 }
 
@@ -777,8 +800,11 @@ function animDeckDraw(onArrive) {
 // ── Buttons ───────────────────────────────────────────────────────────────
 $('btn-draw').addEventListener('click',()=>{socket.emit('game:draw');$('btn-draw').disabled=true;$('btn-knock').disabled=true;});
 $('deck-pile').addEventListener('click',()=>{
-  if(S.gameState?.phase==='draw'&&S.gameState.currentPlayerUserId===S.userId)
-    socket.emit('game:draw');$('btn-draw').disabled=true;$('btn-knock').disabled=true;
+  if(S.gameState?.phase==='draw'&&S.gameState.currentPlayerUserId===S.userId){
+    socket.emit('game:draw');
+    $('btn-draw').disabled=true;
+    $('btn-knock').disabled=true;
+  }
 });
 $('btn-knock').addEventListener('click',()=>{
   if(!confirm('Vuoi davvero bussare? Tutti gli altri faranno un ultimo turno.'))return;
@@ -1066,7 +1092,7 @@ function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
 
   const makePile = (n) =>
     Array(Math.min(n, 5)).fill(0)
-      .map(() => `<div class="swap-mini-back"></div>`)
+      .map(() => cardHTML({known:false},{cls:'swap-mini-back'}))
       .join('');
 
   const overlay = document.createElement('div');
@@ -1106,13 +1132,11 @@ function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
     // Ghost cards at exact positions, cross over
     const makeGhost = (r) => {
       const g = document.createElement('div');
+      g.className = 'card-3d card-back card-ghost swap-fly-card';
       g.style.cssText = [
         `position:fixed`, `z-index:9998`, `pointer-events:none`,
         `left:${r.left}px`, `top:${r.top}px`,
         `width:${r.width}px`, `height:${r.height}px`,
-        `background:linear-gradient(145deg,#1a0900,#3d2000)`,
-        `border:1px solid rgba(196,133,59,.6)`,
-        `border-radius:4px`,
         `box-shadow:0 6px 18px rgba(0,0,0,.7)`
       ].join(';');
       document.body.appendChild(g);
@@ -1247,7 +1271,11 @@ $('btn-back-lobby').addEventListener('click',()=>{
 });
 
 socket.on('game:message',({text})=>{toast(text);addLog(text,'info');});
-socket.on('game:error',({message})=>toast(message,'error'));
+socket.on('game:error',({message})=>{
+  resetMotionState();
+  renderMyHand();renderActions();renderTurnBanner();
+  toast(message,'error');
+});
 
 // ── Sound effects ─────────────────────────────────────────────────────────
 const SFX = {
@@ -1299,14 +1327,11 @@ function animOppDiscard(userId, card) {
   if (!seat || !pile) return;
   SFX.play('Card', 0.4);
   S._skipDiscard = true;
+  clearTimeout(S._skipDiscardFallback);
+  S._skipDiscardFallback=setTimeout(()=>settleDiscardPile(card),1500);
   const pileRect = pile.getBoundingClientRect();
-  // Ghost travels face-down; renderDiscardPile shows the card face-up on land
-  Cards.oppDiscard(seat, pileRect, ()=>{
-    S._skipDiscard = false;
-    const c = S._pendingDiscardCard || S.gameState?.discardTop;
-    S._pendingDiscardCard = null;
-    if (c) renderDiscardPile(c);
-  });
+  // Discarded cards are public, so the in-flight card is face-up too.
+  Cards.oppDiscard(seat, pileRect, ()=>settleDiscardPile(), {...card,known:true});
 }
 
 // ── Track opponent card counts to detect draws ────────────────────────────

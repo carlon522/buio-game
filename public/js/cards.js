@@ -40,9 +40,26 @@ const Cards = (() => {
   }
 
   // ── Ghost factory ─────────────────────────────────────────────────────────
-  function makeGhost(from, z) {
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function ghostClass(card) {
+    if (!card || !card.known || !card.suit || !card.value) return 'card-3d card-back card-ghost';
+    return `card-3d card-front card-ghost${card.isSpecial ? ' is-special' : ''}`;
+  }
+
+  function ghostFace(card) {
+    if (!card || !card.known || !card.suit || !card.value) return '';
+    const color = card.color === 'red' ? 'red' : 'black';
+    return `<img src="/cards/${esc(card.suit)}_${esc(card.value)}.jpg" class="card-img" alt="${esc(card.label)}"
+      onerror="this.style.display='none';makeFB(this.parentElement,'${esc(card.label)}','${esc(card.symbol)}','${color}')">`;
+  }
+
+  function makeGhost(from, z, card) {
     const g = document.createElement('div');
-    g.className = 'card-3d card-back';
+    g.className = ghostClass(card);
+    g.innerHTML = ghostFace(card);
     gsap.set(g, {
       position:      'fixed',
       left:          from.left,
@@ -89,11 +106,12 @@ const Cards = (() => {
     // Arc peak Y: lift upward by |arc| pixels at midpoint
     const peakTop = endTop + arc;   // arc is negative for upward lift
 
-    const g = makeGhost(from, profile.z);
+    const g = makeGhost(from, profile.z, profile.card);
 
-    // Determine when ghost is fully landed (longest tween)
+    // X and the final Y tween are the authoritative landing signals.
+    // Rotation/size are decorative and must never block cleanup callbacks.
     let completed = 0;
-    const total = (arc !== 0) ? 3 : 2; // x, y1+y2 (or just y), rotation
+    const total = 2;
     function check() {
       completed++;
       if (completed >= total) { if (profile.onLand) profile.onLand(g); }
@@ -147,6 +165,7 @@ const Cards = (() => {
     fly(opts.handSlotRect, opts.pileRect, {
       dur: 0.35, z: 9999,
       arc: -55,  rot: -15,
+      card: opts.discardCard,
       onLand: g => { g.remove(); if (opts.onPileLand) opts.onPileLand(); },
     });
 
@@ -155,6 +174,7 @@ const Cards = (() => {
       fly(opts.drawnSlotRect, opts.lastSlotRect, {
         dur: 0.40, z: 9998,
         arc: -12, rot: 3,
+        card: opts.drawnCard,
         onLand: g => { g.remove(); if (opts.onHandLand) opts.onHandLand(); },
       });
     } else {
@@ -168,6 +188,7 @@ const Cards = (() => {
     fly(opts.drawnSlotRect, opts.pileRect, {
       dur: 0.35, z: 9999,
       arc: -55, rot: -15,
+      card: opts.card,
       onLand: g => { g.remove(); if (opts.onLand) opts.onLand(); },
     });
   }
@@ -177,12 +198,14 @@ const Cards = (() => {
     fly(opts.handSlotRect, opts.pileRect, {
       dur: 0.35, z: 9999,
       arc: -55, rot: -15,
+      card: opts.discardCard,
       onLand: g => { g.remove(); if (opts.onPileLand) opts.onPileLand(); },
     });
     if (opts.deckRect && opts.targetSlotRect) {
       fly(opts.deckRect, opts.targetSlotRect, {
         dur: 0.40, z: 9998,
         arc: -20, rot: 5,
+        card: opts.drawCard,
         onLand: g => { g.remove(); if (opts.onDeckLand) opts.onDeckLand(); },
       });
     } else {
@@ -191,11 +214,12 @@ const Cards = (() => {
   }
 
   // 5. ATTACK: aggressive throw — fast, high arc, hard spin
-  function attackCard(handSlotRect, pileRect, onLand) {
+  function attackCard(handSlotRect, pileRect, onLand, card) {
     if (!handSlotRect || !pileRect) { if (onLand) onLand(); return; }
     fly(handSlotRect, pileRect, {
       dur: 0.28, z: 9999,
       arc: -80, rot: -22,
+      card,
       onLand: g => { g.remove(); if (onLand) onLand(); },
     });
   }
@@ -212,13 +236,14 @@ const Cards = (() => {
   }
 
   // 7. OPPONENT DISCARD: mini grows to full as it arcs to pile
-  function oppDiscard(seat, pileRect, onLand) {
+  function oppDiscard(seat, pileRect, onLand, card) {
     const from = seatCardsRect(seat);
     if (!from || !pileRect) { if (onLand) onLand(); return; }
     fly(from, pileRect, {
       dur: 0.40, z: 9995,
       arc: -42, rot: -11,
       toW: cw(), toH: ch(),
+      card,
       onLand: g => { g.remove(); if (onLand) onLand(); },
     });
   }

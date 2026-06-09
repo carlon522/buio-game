@@ -11,9 +11,9 @@ const GameRoom = require('./game/GameRoom');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'buio-dev-secret-change-in-prod';
 const PORT = process.env.PORT || 3000;
-const ATTACK_WINDOW_MS = 6000;
-const PEEK_DURATION_MS = 10000;
-const TURN_TIMER_MS = 60000;
+const ATTACK_WINDOW_MS = Number(process.env.ATTACK_WINDOW_MS) || 6000;
+const PEEK_DURATION_MS = Number(process.env.PEEK_DURATION_MS) || 10000;
+const TURN_TIMER_MS = Number(process.env.TURN_TIMER_MS) || 60000;
 
 // â”€â”€ Bot system â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BOT_NAMES = [
@@ -661,6 +661,7 @@ io.on('connection', socket => {
     const ANNOUNCE_MS = 30000;
     // Pause all game actions during announcement window
     room._revealUntil = Date.now() + ANNOUNCE_MS;
+    room.attackAnnouncer = me.userId;
     io.to(room.id).emit('game:attack-announced', {
       attackerUserId: me.userId, attackerUsername: me.username,
       discardCard, duration: ANNOUNCE_MS,
@@ -676,6 +677,7 @@ io.on('connection', socket => {
       io.to(room.id).emit('game:attack-window-closed');
       io.to(room.id).emit('game:state', room.getPublicState());
       sendPrivateToAll(room);
+      room.attackAnnouncer = null;
     }, ANNOUNCE_MS);
   });
 
@@ -684,15 +686,26 @@ io.on('connection', socket => {
     const room = getMyRoom();
     if (!room) return;
     if (room._actionInProgress) return;
+    if (room.attackAnnouncer && room.attackAnnouncer !== me.userId) {
+      return socket.emit('game:error', { message: 'Another player is attacking' });
+    }
     room._actionInProgress = true;
 
     // Capture discard top BEFORE the attack modifies the pile
     const discardTop = room.discardPile[room.discardPile.length - 1];
 
     const result = room.attack(me.userId, cardIndex);
-    if (result.error) return socket.emit('game:error', { message: result.error });
+    if (result.error) {
+      room._actionInProgress = false;
+      room.attackAnnouncer = null;
+      room._revealUntil = 0;
+      clearTimeout(room._announceTimer);
+      io.to(room.id).emit('game:attack-window-closed');
+      return socket.emit('game:error', { message: result.error });
+    }
 
     clearTimeout(room._announceTimer);
+    room.attackAnnouncer = null;
     room._revealUntil = Date.now() + 4000;
 
     // Reveal to ALL: show original discard card (pre-attack) and attacker's card

@@ -179,6 +179,12 @@ input,select{font-family:inherit}
   pointer-events:none;
 }
 .card-front.is-special{box-shadow:0 0 14px rgba(196,133,59,.5),2px 5px 14px rgba(0,0,0,.45)}
+.card-ghost{
+  pointer-events:none!important;
+  cursor:default!important;
+  will-change:left,top,width,height,transform;
+  transform-origin:center center;
+}
 
 /* Fallback text when image is missing */
 .card-fb{
