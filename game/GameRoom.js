@@ -157,14 +157,22 @@ class GameRoom {
 
     const player = this.players.find(p => p.userId === userId);
     let discardedCard;
+    const drawnWasKnown = !player?.penalized;
 
     if (handIndex === -1) {
       discardedCard = this.drawnCard;
     } else {
       if (handIndex < 0 || handIndex >= player.hand.length) return { error: 'Invalid index' };
       discardedCard = player.hand[handIndex];
-      player.hand[handIndex] = this.drawnCard;
-      player.seenCards.add(handIndex);
+      player.hand.splice(handIndex, 1);
+      const newSeen = new Set();
+      for (const idx of player.seenCards) {
+        if (idx < handIndex) newSeen.add(idx);
+        else if (idx > handIndex) newSeen.add(idx - 1);
+      }
+      player.seenCards = newSeen;
+      player.hand.push(this.drawnCard);
+      if (drawnWasKnown) player.seenCards.add(player.hand.length - 1);
     }
 
     player.penalized = false;
@@ -176,13 +184,20 @@ class GameRoom {
     // Special cards activate ON DISCARD
     if (discardedCard.value === 8 || discardedCard.value === 9) {
       this.phase = 'special'; // pause here until special action is completed
-      return { discardedCard, success: true, specialType: discardedCard.value };
+      return {
+        discardedCard,
+        success: true,
+        specialType: discardedCard.value,
+        appendedDrawnCard: handIndex !== -1,
+      };
     }
     if (discardedCard.value === 10) {
       this.forcedDiscardNext = true; // next player must discard before drawing
     }
 
-    return this._advanceTurn(discardedCard);
+    const result = this._advanceTurn(discardedCard);
+    if (handIndex !== -1) result.appendedDrawnCard = true;
+    return result;
   }
 
   // Called after special card (8 or 9) action is completed
@@ -198,7 +213,10 @@ class GameRoom {
           this.deck = shuffle(this.discardPile);
           this.discardPile = top ? [top] : [];
         }
-        if (this.deck.length > 0) player.hand.push(this.deck.pop());
+        if (this.deck.length > 0) {
+          player.hand.push(this.deck.pop());
+          player.seenCards.add(player.hand.length - 1);
+        }
       }
     }
     return this._advanceTurn(null);
@@ -233,14 +251,20 @@ class GameRoom {
       return { discardedCard, success: true, specialType: discardedCard.value };
     }
 
-    // 2b. Normal: REPLACE IN PLACE so the card position is preserved (memory-friendly)
+    // 2b. Normal: discard, then draw replacement to the right end.
     this.discardPile.push(discardedCard);
     this.lastDiscard = discardedCard;
-    player.seenCards.delete(handIndex); // the replacement is unknown until revealed
+    player.hand.splice(handIndex, 1);
+    const newSeen = new Set();
+    for (const idx of player.seenCards) {
+      if (idx < handIndex) newSeen.add(idx);
+      else if (idx > handIndex) newSeen.add(idx - 1);
+    }
+    player.seenCards = newSeen;
 
     if (discardedCard.value === 10) this.forcedDiscardNext = true;
 
-    // 3. Draw replacement INTO THE SAME SLOT
+    // 3. Draw replacement to the right end and mark it known.
     if (this.deck.length === 0 && this.discardPile.length > 1) {
       const top = this.discardPile.pop();
       this.deck = shuffle(this.discardPile);
@@ -249,13 +273,15 @@ class GameRoom {
     let drawnCard = null, collapsed = false;
     if (this.deck.length > 0) {
       drawnCard = this.deck.pop();
-      player.hand[handIndex] = drawnCard;
+      player.hand.push(drawnCard);
+      player.seenCards.add(player.hand.length - 1);
     } else {
-      player.hand.splice(handIndex, 1); // no card to draw: slot collapses
       collapsed = true;
     }
     const result = this._advanceTurn(discardedCard, drawnCard);
-    result.replaceSlot = collapsed ? -1 : handIndex;
+    result.replaceSlot = collapsed ? -1 : player.hand.length - 1;
+    result.appendSlot = result.replaceSlot;
+    result.drawnCard = drawnCard;
     return result;
   }
 

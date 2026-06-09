@@ -42,6 +42,41 @@ async function launchBrowser() {
   return chromium.launch(options);
 }
 
+async function registerAndStartBotGame(page, suffix) {
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await page.click('[data-tab="register"]');
+
+  const username = `smoke${suffix}${Date.now().toString().slice(-6)}`;
+  await page.fill('#reg-username', username);
+  await page.fill('#reg-password', 'password123');
+  await page.click('#form-register button[type="submit"]');
+  await page.waitForSelector('#screen-lobby.active', { timeout: 5000 });
+
+  await page.click('#btn-vs-bot');
+  await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 10000 });
+}
+
+async function drawCard(page) {
+  await page.click('#btn-draw');
+  await page.waitForFunction(() =>
+    !document.querySelector('#btn-discard-drawn')?.disabled &&
+    Boolean(document.querySelector('#drawn-card-display .card-3d')),
+    null,
+    { timeout: 7000 }
+  );
+}
+
+async function waitForCardMotion(page) {
+  await page.waitForFunction(() =>
+    document.querySelectorAll('.card-ghost').length === 0 &&
+    Boolean(document.querySelector('#discard-pile img')) &&
+    (typeof S === 'undefined' || (!S._skipDiscard && S._animSlot === null && !S._animHidden)),
+    null,
+    { timeout: 8000 }
+  );
+}
+
 async function main() {
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
@@ -81,34 +116,43 @@ async function main() {
     });
     page.on('pageerror', err => browserIssues.push(`pageerror: ${err.message}`));
 
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-    await page.click('[data-tab="register"]');
+    await registerAndStartBotGame(page, 'keep');
+    await drawCard(page);
+    const beforeKeep = await page.evaluate(() => ({
+      handCount: document.querySelectorAll('#my-hand .card-3d').length,
+      drawnAlt: document.querySelector('#drawn-card-display img')?.alt || '',
+    }));
+    await page.click('#my-hand .card-3d');
+    await waitForCardMotion(page);
+    const afterKeep = await page.evaluate(() => ({
+      handCount: document.querySelectorAll('#my-hand .card-3d').length,
+      drawnVisible: !document.querySelector('#drawn-slot')?.classList.contains('hidden'),
+      rightHidden: [...document.querySelectorAll('#my-hand .card-3d')].at(-1)?.style.visibility === 'hidden',
+      discardHasImg: Boolean(document.querySelector('#discard-pile img')),
+    }));
+    if (beforeKeep.handCount !== afterKeep.handCount || afterKeep.drawnVisible || afterKeep.rightHidden || !afterKeep.discardHasImg) {
+      throw new Error(`Keep-drawn animation ended in invalid state: ${JSON.stringify({ beforeKeep, afterKeep })}`);
+    }
 
-    const username = `smoke${Date.now().toString().slice(-8)}`;
-    await page.fill('#reg-username', username);
-    await page.fill('#reg-password', 'password123');
-    await page.click('#form-register button[type="submit"]');
-    await page.waitForSelector('#screen-lobby.active', { timeout: 5000 });
+    const page2 = await browser.newPage();
+    page2.on('console', msg => {
+      if (msg.type() === 'warning') browserIssues.push(`${msg.type()}: ${msg.text()}`);
+      if (msg.type() === 'error' && !msg.text().includes('Failed to load resource')) {
+        browserIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+    page2.on('response', response => {
+      if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) {
+        resourceIssues.push(`${response.status()} ${response.url()}`);
+      }
+    });
+    page2.on('pageerror', err => browserIssues.push(`pageerror: ${err.message}`));
 
-    await page.click('#btn-vs-bot');
-    await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 8000 });
-    await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 8000 });
-
-    await page.click('#btn-draw');
-    await page.waitForFunction(() =>
-      !document.querySelector('#btn-discard-drawn')?.disabled &&
-      Boolean(document.querySelector('#drawn-card-display .card-3d')),
-      null,
-      { timeout: 5000 }
-    );
-    await page.click('#btn-discard-drawn');
-    await page.waitForFunction(() =>
-      document.querySelectorAll('.card-ghost').length === 0 &&
-      Boolean(document.querySelector('#discard-pile img')) &&
-      (typeof S === 'undefined' || (!S._skipDiscard && S._animSlot === null)),
-      null,
-      { timeout: 5000 }
-    );
+    await registerAndStartBotGame(page2, 'drop');
+    await drawCard(page2);
+    await page2.click('#btn-discard-drawn');
+    await waitForCardMotion(page2);
+    await page2.close();
 
     if (browserIssues.length) {
       throw new Error(`Browser issues:\n${browserIssues.join('\n')}`);
@@ -117,7 +161,7 @@ async function main() {
       throw new Error(`Resource issues:\n${resourceIssues.join('\n')}`);
     }
 
-    console.log('Smoke test passed: register, quick bot game, draw, discard.');
+    console.log('Smoke test passed: register, quick bot games, keep drawn, discard drawn.');
   } catch (err) {
     console.error(err.message);
     if (serverOutput.trim()) console.error('\nServer output:\n' + serverOutput.trim());
