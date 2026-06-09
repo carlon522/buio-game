@@ -8,6 +8,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const ROOT = path.join(__dirname, '..');
+const PKG = require(path.join(ROOT, 'package.json'));
 const PORT = Number(process.env.SMOKE_PORT) || 3100;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DB_PATH = path.join(os.tmpdir(), `buio-smoke-${Date.now()}.db`);
@@ -42,8 +43,20 @@ async function launchBrowser() {
   return chromium.launch(options);
 }
 
+async function assertVersionBadge(page, label) {
+  const expected = `v${PKG.version}`;
+  await page.waitForFunction(version =>
+    document.querySelector('#app-version')?.textContent?.trim() === version,
+    expected,
+    { timeout: 5000 }
+  );
+  const visible = await page.locator('#app-version').isVisible();
+  if (!visible) throw new Error(`Version badge hidden on ${label}`);
+}
+
 async function registerAndStartBotGame(page, suffix) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await assertVersionBadge(page, 'auth');
   await page.click('[data-tab="register"]');
 
   const username = `smoke${suffix}${Date.now().toString().slice(-6)}`;
@@ -51,10 +64,12 @@ async function registerAndStartBotGame(page, suffix) {
   await page.fill('#reg-password', 'password123');
   await page.click('#form-register button[type="submit"]');
   await page.waitForSelector('#screen-lobby.active', { timeout: 5000 });
+  await assertVersionBadge(page, 'lobby');
 
   await page.click('#btn-vs-bot');
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 10000 });
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 10000 });
+  await assertVersionBadge(page, 'game');
 }
 
 async function drawCard(page) {

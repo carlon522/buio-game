@@ -17,6 +17,15 @@ input,select{font-family:inherit}
 .screen{position:fixed;inset:0}
 .screen.active{display:flex}
 .screen.hidden{display:none}
+.app-version{
+  position:fixed;top:.75rem;left:.75rem;z-index:9600;
+  color:rgba(255,248,240,.5);background:rgba(0,0,0,.42);
+  border:1px solid rgba(196,133,59,.22);border-radius:999px;
+  padding:.25rem .55rem;font-size:.7rem;font-weight:800;letter-spacing:.04em;
+  line-height:1;backdrop-filter:blur(8px);pointer-events:none;
+}
+.screen-lobby-active .app-version{top:1rem;left:7.9rem;z-index:20}
+.screen-game-active .app-version{top:.48rem;left:.75rem;z-index:160}
 
 /* ── Form elements ───────────────────────────────────────────────────────── */
 .field{display:flex;flex-direction:column;gap:.3rem}
