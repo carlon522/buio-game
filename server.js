@@ -11,9 +11,9 @@ const GameRoom = require('./game/GameRoom');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'buio-dev-secret-change-in-prod';
 const PORT = process.env.PORT || 3000;
-const ATTACK_WINDOW_MS = 6000;
-const PEEK_DURATION_MS = 10000;
-const TURN_TIMER_MS = 60000;
+const ATTACK_WINDOW_MS = Number(process.env.ATTACK_WINDOW_MS) || 6000;
+const PEEK_DURATION_MS = Number(process.env.PEEK_DURATION_MS) || 10000;
+const TURN_TIMER_MS = Number(process.env.TURN_TIMER_MS) || 60000;
 
 // â”€â”€ Bot system â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BOT_NAMES = [
@@ -121,6 +121,8 @@ function botAct(roomId, botId) {
       }
       const dr = room.drawFromDeck(botId);
       if (dr.error) { console.warn('[bot] draw error:', dr.error); triggerBot(roomId); return; }
+      const botPlayer = room.players.find(p => p.userId === botId);
+      io.to(roomId).emit('game:player-drew', { userId: botId, username: botPlayer?.username || 'Bot' });
       io.to(roomId).emit('game:state', room.getPublicState());
 
       // Pause while "looking at the drawn card" before deciding
@@ -153,12 +155,12 @@ function botAct(roomId, botId) {
         const fb = room.discardCard(botId, -1);
         if (fb.error) { console.warn('[bot] discard fallback error:', fb.error); triggerBot(roomId); return; }
         io.to(roomId).emit('game:state', room.getPublicState());
-        if (fb.discardedCard) io.to(roomId).emit('game:card-discarded', { card: fb.discardedCard, discarderId: botId });
+        if (fb.discardedCard) io.to(roomId).emit('game:card-discarded', { card: fb.discardedCard, discarderId: botId, handIndex: -1 });
         advanceTurnInRoom(roomId, fb);
         return;
       }
       io.to(roomId).emit('game:state', room.getPublicState());
-      if (dis.discardedCard) io.to(roomId).emit('game:card-discarded', { card: dis.discardedCard, discarderId: botId });
+      if (dis.discardedCard) io.to(roomId).emit('game:card-discarded', { card: dis.discardedCard, discarderId: botId, handIndex: idx });
       if (dis.specialType === 9) {
         // Nove: peek at a card the bot hasn't seen yet
         setTimeout(() => {
@@ -213,7 +215,7 @@ function botAct(roomId, botId) {
     const idx = Math.floor(Math.random() * Math.max(1, player?.hand.length || 1));
     const res = room.forcedDiscardFromHand(botId, idx);
     if (res.error) { console.warn('[bot] forced-discard error:', res.error); triggerBot(roomId); return; }
-    io.to(roomId).emit('game:card-discarded', { card: res.discardedCard, discarderId: botId });
+    io.to(roomId).emit('game:card-discarded', { card: res.discardedCard, discarderId: botId, handIndex: idx, forced: true });
     io.to(roomId).emit('game:state', room.getPublicState());
 
     if (res.specialType === 9) {
@@ -486,6 +488,7 @@ io.on('connection', socket => {
     if (result.error) return socket.emit('game:error', { message: result.error });
 
     socket.emit('game:drawn-card', { card: result.drawnCard, penalized: result.penalized });
+    io.to(room.id).emit('game:player-drew', { userId: me.userId, username: me.username });
     io.to(room.id).emit('game:state', room.getPublicState());
     // No special prompts on draw â€” specials trigger when discarded
     clearTimeout(room._turnTimer);
@@ -569,7 +572,7 @@ io.on('connection', socket => {
 
     socket.emit('game:private', room.getPrivateState(me.userId));
     io.to(room.id).emit('game:state', room.getPublicState());
-    io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId });
+    io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId, handIndex: handIndex ?? -1 });
 
     if (result.specialType === 8 || result.specialType === 9) {
       // Special card activated â€” emit prompt only to the current player
@@ -597,10 +600,6 @@ io.on('connection', socket => {
     } else if (result.type === 'scoring' || result.type === 'gameover') {
       broadcastScoring(room.id, result);
     } else {
-      // Reveal the replacement card to the player briefly (they should see what they picked up)
-      const player = room.players.find(p => p.userId === me.userId);
-      const replacementCard = player?.hand[player.hand.length - 1];
-      if (replacementCard) socket.emit('game:forced-draw-reveal', { card: replacementCard, serverIndex: player.hand.length - 1 });
       sendPrivateToAll(room);
       startTurnTimer(room);
       const cur = room.getCurrentPlayer();
@@ -622,7 +621,7 @@ io.on('connection', socket => {
     const result = room.forcedDiscardFromHand(me.userId, handIndex ?? 0);
     if (result.error) return socket.emit('game:error', { message: result.error });
 
-    io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId });
+    io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId, handIndex: handIndex ?? 0, forced: true });
     io.to(room.id).emit('game:state', room.getPublicState());
 
     if (result.specialType === 8 || result.specialType === 9) {
@@ -661,6 +660,7 @@ io.on('connection', socket => {
     const ANNOUNCE_MS = 30000;
     // Pause all game actions during announcement window
     room._revealUntil = Date.now() + ANNOUNCE_MS;
+    room.attackAnnouncer = me.userId;
     io.to(room.id).emit('game:attack-announced', {
       attackerUserId: me.userId, attackerUsername: me.username,
       discardCard, duration: ANNOUNCE_MS,
@@ -676,6 +676,7 @@ io.on('connection', socket => {
       io.to(room.id).emit('game:attack-window-closed');
       io.to(room.id).emit('game:state', room.getPublicState());
       sendPrivateToAll(room);
+      room.attackAnnouncer = null;
     }, ANNOUNCE_MS);
   });
 
@@ -684,15 +685,26 @@ io.on('connection', socket => {
     const room = getMyRoom();
     if (!room) return;
     if (room._actionInProgress) return;
+    if (room.attackAnnouncer && room.attackAnnouncer !== me.userId) {
+      return socket.emit('game:error', { message: 'Another player is attacking' });
+    }
     room._actionInProgress = true;
 
     // Capture discard top BEFORE the attack modifies the pile
     const discardTop = room.discardPile[room.discardPile.length - 1];
 
     const result = room.attack(me.userId, cardIndex);
-    if (result.error) return socket.emit('game:error', { message: result.error });
+    if (result.error) {
+      room._actionInProgress = false;
+      room.attackAnnouncer = null;
+      room._revealUntil = 0;
+      clearTimeout(room._announceTimer);
+      io.to(room.id).emit('game:attack-window-closed');
+      return socket.emit('game:error', { message: result.error });
+    }
 
     clearTimeout(room._announceTimer);
+    room.attackAnnouncer = null;
     room._revealUntil = Date.now() + 4000;
 
     // Reveal to ALL: show original discard card (pre-attack) and attacker's card
@@ -888,12 +900,14 @@ function autoPlayTurn(roomId) {
   const drawRes = room.drawFromDeck(cur.userId);
   if (drawRes.error) return;
 
+  io.to(roomId).emit('game:player-drew', { userId: cur.userId, username: cur.username });
   io.to(roomId).emit('game:state', room.getPublicState());
 
   const discardRes = room.discardCard(cur.userId, -1);
   if (discardRes.error) return;
 
   io.to(roomId).emit('game:state', room.getPublicState());
+  io.to(roomId).emit('game:card-discarded', { card: discardRes.discardedCard, discarderId: cur.userId, handIndex: -1 });
   io.to(roomId).emit('game:attack-window', { card: discardRes.discardedCard, duration: ATTACK_WINDOW_MS });
   clearTimeout(room._attackTimer);
   room._attackTimer = setTimeout(() => endAttackWindow(roomId), ATTACK_WINDOW_MS);
@@ -908,6 +922,7 @@ function autoDiscard(roomId, userId) {
   if (result.error) return;
 
   io.to(roomId).emit('game:state', room.getPublicState());
+  io.to(roomId).emit('game:card-discarded', { card: result.discardedCard, discarderId: userId, handIndex: -1 });
   io.to(roomId).emit('game:attack-window', { card: result.discardedCard, duration: ATTACK_WINDOW_MS });
   clearTimeout(room._attackTimer);
   room._attackTimer = setTimeout(() => endAttackWindow(roomId), ATTACK_WINDOW_MS);
