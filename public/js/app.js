@@ -31,6 +31,10 @@ const S = {
   _penaltyAnimating:false,
   _roundEndBusy:false,
   _peekServerEnded:false,
+  _handCompacting:false,
+  _pendingPrivateState:null,
+  _pendingAttackRemoval:null,
+  _removalGap:null,
 };
 
 const socket = io({ autoConnect: false });
@@ -197,6 +201,100 @@ function appendDrawnOrderAfterDiscard(visualIdx, serverIdx, drawnCard) {
   return S.handOrder.length-1;
 }
 
+function removeHandOrderAfterAttack(visualIdx, serverIdx) {
+  const hand=S.privateState?.hand;
+  if(!hand?.length) return;
+  const oldCount=hand.length;
+  const nextHand=hand.filter((_,idx)=>idx!==serverIdx);
+  S.privateState.hand=nextHand.map((card,idx)=>({...card,index:idx}));
+  S.privateState.seenIndices=nextHand.map((card,idx)=>card?.known?idx:null).filter(idx=>idx!==null);
+  const oldOrder=S.handOrder||Array.from({length:oldCount},(_,i)=>i);
+  S.handOrder=oldOrder
+    .filter((_,idx)=>idx!==visualIdx)
+    .map(idx=>idx>serverIdx?idx-1:idx);
+  if(S.cardRaise?.length===oldCount) S.cardRaise=S.cardRaise.filter((_,idx)=>idx!==visualIdx);
+}
+
+function handCardKeyMap() {
+  const map=new Map();
+  $('my-hand')?.querySelectorAll('.card-3d[data-card-key]').forEach(card=>{
+    const rect=card.getBoundingClientRect();
+    map.set(card.dataset.cardKey,rect);
+  });
+  return map;
+}
+
+function animateHandCompaction({visualIdx,commit,onShiftStart,onDone,gapMs=420,duration=900}) {
+  if(S._handCompacting) return;
+  S._handCompacting=true;
+  const before=handCardKeyMap();
+  S._removalGap=visualIdx;
+  S._animHidden=new Set([visualIdx]);
+  renderMyHand();
+
+  setTimeout(()=>{
+    const result=commit?.();
+    S._removalGap=null;
+    renderMyHand();
+    const cards=[...$('my-hand').querySelectorAll('.card-3d[data-card-key]')];
+    cards.forEach(card=>{
+      const oldRect=before.get(card.dataset.cardKey);
+      const newRect=card.getBoundingClientRect();
+      if(!oldRect||!newRect.width) return;
+      card.style.transition='none';
+      card.style.transform=`translate(${oldRect.left-newRect.left}px,${oldRect.top-newRect.top}px)`;
+    });
+    onShiftStart?.(result);
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      cards.forEach(card=>{
+        card.style.transition=`transform ${duration}ms cubic-bezier(.25,.46,.45,.94)`;
+        card.style.transform='';
+      });
+    }));
+    setTimeout(()=>{
+      cards.forEach(card=>{card.style.transition='';card.style.transform='';});
+      S._handCompacting=false;
+      if(S._pendingPrivateState){
+        S.privateState=S._pendingPrivateState;
+        S._pendingPrivateState=null;
+      }
+      onDone?.(result);
+      renderMyHand();renderScore();renderActions();
+    },duration+80);
+  },gapMs);
+}
+
+function animateOpponentHandRemoval(userId,removedIndex,gapMs=420,duration=900) {
+  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+  const oldCards=[...seat?.querySelectorAll('.mini-card:not(.opp-drawn-card)')||[]];
+  if(!seat||!oldCards.length) return;
+  const before=oldCards.map(card=>card.getBoundingClientRect());
+  oldCards[Math.min(removedIndex,oldCards.length-1)]?.classList.add('motion-hidden');
+  setTimeout(()=>{
+    const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
+    if(!player||player.cardCount<1) return;
+    player.cardCount-=1;
+    renderSeats();
+    const nextSeat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+    const nextCards=[...nextSeat?.querySelectorAll('.mini-card:not(.opp-drawn-card)')||[]];
+    nextCards.forEach((card,newIndex)=>{
+      const oldIndex=newIndex<removedIndex?newIndex:newIndex+1;
+      const oldRect=before[oldIndex];
+      const newRect=card.getBoundingClientRect();
+      if(!oldRect||!newRect.width) return;
+      card.style.transition='none';
+      card.style.transform=`translate(${oldRect.left-newRect.left}px,${oldRect.top-newRect.top}px)`;
+    });
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      nextCards.forEach(card=>{
+        card.style.transition=`transform ${duration}ms cubic-bezier(.25,.46,.45,.94)`;
+        card.style.transform='';
+      });
+    }));
+    setTimeout(()=>nextCards.forEach(card=>{card.style.transition='';card.style.transform='';}),duration+80);
+  },gapMs);
+}
+
 // ── Seat positions (trigonometry) ─────────────────────────────────────────
 function getOppPosition(idx, total) {
   const rx=43, ry=37;
@@ -315,7 +413,7 @@ socket.on('game:state',state=>{
   S.gameState=state;
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
-  if(_me && (!S.handOrder || S.handOrder.length!==_me.cardCount)){
+  if(_me && !S._handCompacting && (!S.handOrder || S.handOrder.length!==_me.cardCount)){
     S.handOrder=Array.from({length:_me.cardCount},(_,i)=>i);
   }
   if(state.status==='waiting'){showWaiting(state);return;}
@@ -339,6 +437,10 @@ socket.on('game:state',state=>{
   renderBoard();renderTurnBanner();
 });
 socket.on('game:private',priv=>{
+  if(S._handCompacting){
+    S._pendingPrivateState=priv;
+    return;
+  }
   S.privateState=priv;
   // Always sync drawn card from authoritative server state.
   // priv.drawnCard is non-null only when you are current player with a drawn card.
@@ -372,7 +474,7 @@ socket.on('game:starting',()=>{
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));hide($('panel-count-cards'));
   clearTimeout(S._keptRevealTimer);
   S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._keptRevealServerIdx=null;S._attackAnnouncer=null;
-  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;S._penaltyAnimating=false;S._roundEndBusy=false;
+  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;S._penaltyAnimating=false;S._roundEndBusy=false;S._handCompacting=false;S._pendingPrivateState=null;S._pendingAttackRemoval=null;S._removalGap=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -543,11 +645,12 @@ function renderSeats() {
     const motion=getOpponentMotion(player.userId);
     const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>{
       const incoming=drawing&&i===a.length-1;
+      const gap=motion?.stage==='gap'&&motion.sourceIndex===i;
       const hidden=motion?.reconciled
         ? motion.targetIndex===i && ['keep','forced'].includes(motion.kind)
         : motion?.sourceIndex===i && motion.kind!=='discard-drawn';
       const dealHidden=_dealBusy&&!S._dealLanded?.has(`${player.userId}:${i}`);
-      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden?' motion-hidden':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
+      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden&&!gap?' motion-hidden':''}${gap?' mini-gap':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
     }).join('');
     const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}${motion?.hideDrawn?' motion-hidden':''}"></div>`:'';
     const current=player.isCurrentPlayer&&!player.isEliminated;
@@ -598,10 +701,11 @@ function renderMyHand() {
     if(S._attackMode) cls+=' atk-tgt';
     if(S._nove9Mode) cls+=' clickable'; // nove9: tap to peek
     if(visualIdx===S._selIdx) cls+=' selected';
+    if(visualIdx===S._removalGap) cls+=' removal-gap';
     const raise=S.cardRaise?.[visualIdx]||0;
     const raiseAttr=raise>0?` data-raise="${raise}"`:'';
     const dealHidden=_dealBusy&&!S._dealLanded?.has(`${S.userId}:${serverIdx}`);
-    const hiddenAttr=(S._animSlot===visualIdx||S._animHidden?.has(visualIdx)||dealHidden)?' style="visibility:hidden"':'';
+    const hiddenAttr=(S._animSlot===visualIdx||(S._animHidden?.has(visualIdx)&&visualIdx!==S._removalGap)||dealHidden)?' style="visibility:hidden"':'';
 
     // Show face-up: initial peek OR nove9/special card reveal
     const isPeekUp=S._peekRevealed?.has(visualIdx);
@@ -620,6 +724,10 @@ function renderMyHand() {
   }).join('');
 
   handEl.querySelectorAll('.card-3d').forEach((el,vi)=>{
+    const serverIdx=S.handOrder?.[vi]??vi;
+    const key=S.privateState?.hand?.[serverIdx]?.id||`slot-${serverIdx}`;
+    el.dataset.cardKey=key;
+    el.dataset.serverIndex=String(serverIdx);
     el.addEventListener('click',()=>onHandClick(vi));
     // Drag-to-reorder
     el.draggable=true;
@@ -673,6 +781,7 @@ function renderActions() {
   hint.textContent='';
 
   if(_dealBusy){ hint.textContent=_lang==='en'?'Dealing cards…':'Distribuzione carte…'; return; }
+  if(S._handCompacting){ hint.textContent=_lang==='en'?'Cards moving…':'Carte in movimento…'; return; }
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
   if(myPlayer?.isEliminated) return;
   if(S._attackRevealActive){ hint.textContent=t('attack_running'); return; }
@@ -689,6 +798,7 @@ function renderActions() {
 // ── Hand click ────────────────────────────────────────────────────────────
 function onHandClick(visualIdx) {
   if(S._attackRevealActive) return;
+  if(S._handCompacting) return;
   if(S._animSlot!==null && !S._attackMode && !S._nove9Mode) return; // ignore clicks mid-discard-animation
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
@@ -713,39 +823,37 @@ function onHandClick(visualIdx) {
     const discardCard   = knownHandCardAtVisual(visualIdx);
     const drawnCard     = S.drawnCard?.known ? {...S.drawnCard,known:true} : null;
 
-    // The selected hand card leaves; the drawn card joins at the right edge.
-    // Known/unknown state follows the actual card state through the animation.
-    const appendVI=appendDrawnOrderAfterDiscard(visualIdx, serverIdx, drawnCard);
-    const keptServerIdx=S.handOrder?.[appendVI] ?? appendVI;
     S._skipDiscard = true;
     S._animSlot    = null;
-    S._animHidden  = new Set([appendVI]);
     clearTimeout(S._skipDiscardFallback);
-    S._skipDiscardFallback=setTimeout(()=>{ S._animHidden=null; settleDiscardPile(); renderMyHand(); },2200);
+    S._skipDiscardFallback=setTimeout(()=>{ S._animHidden=null; settleDiscardPile(); renderMyHand(); },3200);
     S.drawnCard=null; S._selIdx=-1; hide($('drawn-slot'));
-    renderMyHand();
-
+    Cards.discardHandToPile(handSlotRect,pileRect,discardCard,()=>settleDiscardPile());
     socket.emit('game:discard',{handIndex:serverIdx});
-
-    // Target: appended slot position (hidden, but has a valid rect)
-    const appendSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[appendVI]);
-
-    Cards.discardHandCard({
-      handSlotRect, pileRect, drawnSlotRect,
-      discardCard, drawnCard,
-      appendSlotRect,
-      onPileLand: ()=>{
-        settleDiscardPile();
+    animateHandCompaction({
+      visualIdx,
+      commit:()=>{
+        const appendVI=appendDrawnOrderAfterDiscard(visualIdx,serverIdx,drawnCard);
+        const keptServerIdx=S.handOrder?.[appendVI]??appendVI;
+        S._animHidden=new Set([appendVI]);
+        return {appendVI,keptServerIdx};
       },
-      onHandLand: ()=>{
+      onShiftStart:({appendVI,keptServerIdx})=>{
+        const appendSlotRect=Cards.rect($('my-hand').querySelectorAll('.card-3d')[appendVI]);
+        Cards.keepDrawnToHand(drawnSlotRect,appendSlotRect,drawnCard,()=>{
+          clearTimeout(S._keptRevealTimer);
+          S._keptRevealServerIdx=keptServerIdx;
+          S._animHidden=null;renderMyHand();renderScore();SFX.play('Card',0.18);
+          $('my-hand')?.querySelectorAll('.card-3d')[appendVI]?.classList.add('card-turn-in');
+          S._keptRevealTimer=setTimeout(()=>{
+            S._keptRevealServerIdx=null;
+            renderMyHand();
+          },4000);
+        });
+      },
+      onDone:()=>{
         clearTimeout(S._keptRevealTimer);
-        S._keptRevealServerIdx=keptServerIdx;
-        S._animHidden=null; renderMyHand();renderScore(); SFX.play('Card',0.18);
-        $('my-hand')?.querySelectorAll('.card-3d')[appendVI]?.classList.add('card-turn-in');
-        S._keptRevealTimer=setTimeout(()=>{
-          S._keptRevealServerIdx=null;
-          renderMyHand();
-        },4000);
+        settleDiscardPile();
       },
     });
     return;
@@ -758,32 +866,33 @@ function onHandClick(visualIdx) {
     const deckRect     = Cards.rect($('deck-pile'));
     const discardCard  = knownHandCardAtVisual(visualIdx);
 
-    const appendVI=appendDrawnOrderAfterDiscard(visualIdx, serverIdx, {known:false});
     S._skipDiscard = true;
     S._animSlot    = null;
-    S._animHidden  = new Set([appendVI]);
     clearTimeout(S._skipDiscardFallback);
-    S._skipDiscardFallback=setTimeout(()=>{ S._animHidden=null; settleDiscardPile(); renderMyHand(); },2200);
-    renderMyHand();
+    S._skipDiscardFallback=setTimeout(()=>{ S._animHidden=null; settleDiscardPile(); renderMyHand(); },3200);
+    Cards.discardHandToPile(handSlotRect,pileRect,discardCard,()=>settleDiscardPile());
     socket.emit('game:forced-discard',{handIndex:serverIdx});
     S._selIdx=-1;
-
-    const appendSlotRect = Cards.rect($('my-hand').querySelectorAll('.card-3d')[appendVI]);
-
-    Cards.forcedDiscard({
-      handSlotRect, pileRect, deckRect, appendSlotRect,
-      discardCard,
-      onPileLand: ()=>{
-        settleDiscardPile();
+    animateHandCompaction({
+      visualIdx,
+      commit:()=>{
+        const appendVI=appendDrawnOrderAfterDiscard(visualIdx,serverIdx,{known:false});
+        S._animHidden=new Set([appendVI]);
+        return {appendVI};
       },
-      onDeckLand: ()=>{
-        S._animHidden=null; renderMyHand();renderScore(); SFX.play('Card',0.18);
+      onShiftStart:({appendVI})=>{
+        const appendSlotRect=Cards.rect($('my-hand').querySelectorAll('.card-3d')[appendVI]);
+        Cards.forcedReplacement(deckRect,appendSlotRect,()=>{
+          S._animHidden=null;renderMyHand();renderScore();SFX.play('Card',0.18);
+        });
       },
+      onDone:()=>settleDiscardPile(),
     });
     return;
   }
 
   if(S._attackMode){
+    S._pendingAttackRemoval={visualIdx,serverIdx};
     if(cardEl){
       // Capture rect NOW before any re-render can detach cardEl
       const slotR = cardEl.getBoundingClientRect();
@@ -1140,7 +1249,7 @@ socket.on('game:card-discarded',({card, discarderId, handIndex, forced})=>{
 });
 
 // ── Attack reveal ─────────────────────────────────────────────────────────
-socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard})=>{
+socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard,cardIndex})=>{
   S._attackAnnouncer=null;
   S._attackRevealActive=true;
   // Don't clear S.drawnCard here — if this player was in discard phase,
@@ -1152,6 +1261,31 @@ socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCar
   setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 2800);
   showAttackReveal(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard);
   addLog(success?`✅ ${attackerUsername}: azzeccato! ${cardStr(card)}`:`❌ ${attackerUsername}: sbagliato! +1 carta`,success?'success':'danger');
+
+  if(success){
+    setTimeout(()=>{
+      if(String(attackerUserId)===String(S.userId)){
+        const removal=S._pendingAttackRemoval;
+        if(!removal) return;
+        animateHandCompaction({
+          visualIdx:removal.visualIdx,
+          commit:()=>{
+            removeHandOrderAfterAttack(removal.visualIdx,removal.serverIdx);
+            S._animHidden=null;
+          },
+          onDone:()=>{S._pendingAttackRemoval=null;},
+        });
+      }else{
+        animateOpponentHandRemoval(attackerUserId,Number.isInteger(cardIndex)?cardIndex:0);
+      }
+    },4550);
+  }else{
+    setTimeout(()=>{
+      S._pendingAttackRemoval=null;
+      S._animHidden=null;
+      renderMyHand();
+    },5050);
+  }
 
   // At 2.5s: clear selection visual (game:state will drive the full unpause)
   setTimeout(()=>{
@@ -1601,7 +1735,6 @@ function reconcileOpponentMotions(state) {
   Object.entries(S._oppMotions).forEach(([userId,motion])=>{
     const player=state.players.find(p=>String(p.userId)===String(userId));
     if(!player) return;
-    motion.reconciled=true;
     motion.targetIndex=Math.max(0,player.cardCount-1);
   });
 }
@@ -1683,13 +1816,14 @@ function animOppDiscard(userId, card, handIndex=-1, forced=false) {
     targetIndex:Math.max(0,seat.querySelectorAll('.mini-card:not(.opp-drawn-card)').length-1),
     hideDrawn:!!drawnEl,
     reconciled:false,
+    stage:'gap',
   };
   setOpponentMotion(userId,motion);
   motion.timeout=setTimeout(()=>{
     settleDiscardPile(card);
     finishOpponentMotion(userId);
-  },2800);
-  source.element?.classList.add('motion-hidden');
+  },3400);
+  source.element?.classList.add('mini-gap');
   drawnEl?.classList.add('motion-hidden');
 
   if(handIndex===-1 && drawnEl){
@@ -1710,11 +1844,32 @@ function animOppDiscard(userId, card, handIndex=-1, forced=false) {
     landed();
   }, null, 'down');
 
-  if(drawnEl){
-    Cards.oppKeepDrawn(drawnRect, handTarget, landed);
-  } else if(forced){
-    const deckRect=Cards.rect(document.getElementById('deck-pile'));
-    Cards.oppDraw(deckRect, handTarget, landed);
+  if(drawnEl||forced){
+    const before=[...seat.querySelectorAll('.mini-card:not(.opp-drawn-card)')].map(el=>el.getBoundingClientRect());
+    setTimeout(()=>{
+      motion.stage='shift';
+      motion.reconciled=true;
+      renderSeats();
+      const shiftedSeat=document.querySelector('.seat[data-user-id="'+userId+'"]');
+      const shifted=[...shiftedSeat?.querySelectorAll('.mini-card:not(.opp-drawn-card)')||[]];
+      shifted.forEach((el,newIndex)=>{
+        if(newIndex===motion.targetIndex) return;
+        const oldIndex=newIndex<source.index?newIndex:newIndex+1;
+        const oldRect=before[oldIndex],newRect=el.getBoundingClientRect();
+        if(!oldRect||!newRect.width) return;
+        el.style.transition='none';
+        el.style.transform=`translate(${oldRect.left-newRect.left}px,${oldRect.top-newRect.top}px)`;
+      });
+      const target=Cards.rect(shifted[motion.targetIndex])||Cards.seatCardsRect(shiftedSeat)||handTarget;
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        shifted.forEach(el=>{
+          el.style.transition='transform 900ms cubic-bezier(.25,.46,.45,.94)';
+          el.style.transform='';
+        });
+      }));
+      if(drawnEl) Cards.oppKeepDrawn(drawnRect,target,landed);
+      else Cards.oppDraw(Cards.rect(document.getElementById('deck-pile')),target,landed);
+    },420);
   }
 }
 
@@ -1866,6 +2021,18 @@ window.buioTest = {
   testPenalty(userId=S.userId){
     const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
     animateAttackPenaltyDraw({userId,targetCardCount:(player?.cardCount||4)+1});
+  },
+  testOpponentKeepDiscard(handIndex=1){
+    const player=S.gameState?.players.find(p=>String(p.userId)!==String(S.userId));
+    if(!player) return false;
+    const card={suit:'coppe',value:6,label:'6',symbol:'C',color:'red',isSpecial:false};
+    S._oppDrawn=S._oppDrawn||{};
+    S._oppDrawn[player.userId]=true;
+    renderSeats();
+    requestAnimationFrame(()=>requestAnimationFrame(()=>
+      animOppDiscard(player.userId,card,handIndex,false)
+    ));
+    return true;
   },
   testRoundEnd(){
     showRoundEndTransition(()=>renderScoring({

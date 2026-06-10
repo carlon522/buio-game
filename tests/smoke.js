@@ -197,16 +197,37 @@ async function assertOpponentDiscardMotion(page, turnBarHeight) {
     discardGhosts: document.querySelectorAll('.opp-discard-ghost').length,
     keepGhosts: document.querySelectorAll('.opp-keep-ghost').length,
     hiddenSources: document.querySelectorAll('.seat .motion-hidden').length,
+    gapSources: document.querySelectorAll('.seat .mini-gap').length,
     motionCount: typeof S === 'undefined' || !S._oppMotions ? 0 : Object.keys(S._oppMotions).length,
+    motionKind: typeof S === 'undefined' || !S._oppMotions ? null : Object.values(S._oppMotions)[0]?.kind,
   }));
-  if (during.discardGhosts !== 1 || during.hiddenSources < 1 || during.motionCount !== 1) {
+  if (during.discardGhosts !== 1 || during.hiddenSources+during.gapSources < 1 || during.motionCount !== 1) {
     throw new Error(`Opponent motion duplicated its source: ${JSON.stringify(during)}`);
   }
   await capture(page, 'opponent-discard-midflight');
+  if (during.motionKind !== 'discard-drawn') {
+    await page.waitForFunction(() =>
+      typeof S !== 'undefined' &&
+      S._oppMotions &&
+      Object.values(S._oppMotions).some(motion => motion.stage === 'shift'),
+      null,
+      { timeout: 2500 }
+    );
+    const shifting = await page.evaluate(() => ({
+      gaps:document.querySelectorAll('.seat .mini-gap').length,
+      moving:[...document.querySelectorAll('.seat .mini-card')]
+        .filter(card=>getComputedStyle(card).transform!=='none').length,
+      stages:typeof S==='undefined'||!S._oppMotions?[]:Object.values(S._oppMotions).map(m=>m.stage),
+    }));
+    if(shifting.gaps!==0||shifting.moving<1||!shifting.stages.includes('shift')){
+      throw new Error(`Opponent hand did not visibly compact: ${JSON.stringify(shifting)}`);
+    }
+    await capture(page, 'opponent-hand-compaction');
+  }
 
   await page.waitForFunction(() =>
     document.querySelectorAll('.opp-discard-ghost,.opp-keep-ghost').length === 0 &&
-    document.querySelectorAll('.seat .motion-hidden').length === 0 &&
+    document.querySelectorAll('.seat .motion-hidden,.seat .mini-gap').length === 0 &&
     (typeof S === 'undefined' || !S._oppMotions),
     null,
     { timeout: 8000 }
@@ -260,6 +281,34 @@ async function assertMobileAttackOverlay(browser) {
       throw new Error(`Attack overlay overflows mobile viewport: ${JSON.stringify(layout)}`);
     }
     await capture(page, 'attack-overlay-mobile');
+  } finally {
+    await page.close();
+  }
+}
+
+async function assertMobileHandCompaction(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await registerAndStartBotGame(page, 'mobile-shift');
+    await drawCard(page);
+    const cards=page.locator('#my-hand .card-3d');
+    const count=await cards.count();
+    if(count<2) throw new Error(`Mobile hand had only ${count} cards`);
+    await cards.nth(0).click();
+    await page.waitForTimeout(150);
+    const gap=await page.evaluate(() => {
+      const el=document.querySelector('#my-hand .removal-gap');
+      const rect=el?.getBoundingClientRect();
+      return {count:document.querySelectorAll('#my-hand .removal-gap').length,left:rect?.left,right:rect?.right,width:innerWidth};
+    });
+    if(gap.count!==1||gap.left<0||gap.right>gap.width) {
+      throw new Error(`Mobile removal gap overflowed: ${JSON.stringify(gap)}`);
+    }
+    await page.waitForTimeout(520);
+    const moving=await page.evaluate(() => [...document.querySelectorAll('#my-hand .card-3d')]
+      .filter(card=>getComputedStyle(card).transform!=='none').length);
+    if(moving<1) throw new Error('Mobile hand cards did not visibly slide');
+    await capture(page,'hand-compaction-mobile');
   } finally {
     await page.close();
   }
@@ -387,10 +436,51 @@ async function main() {
         const card = S.privateState.hand[serverIndex];
         return card?.known && ![8, 9].includes(card.value);
       });
-      return visual >= 0 ? visual : 0;
+      return visual >= 0 && visual < order.length - 1 ? visual : 0;
     });
+    const trackedShift = await page.evaluate(discardIndex => {
+      const cards=[...document.querySelectorAll('#my-hand .card-3d')];
+      const tracked=cards[discardIndex+1];
+      const rect=tracked.getBoundingClientRect();
+      return {key:tracked.dataset.cardKey,left:rect.left,width:rect.width};
+    }, discardVisualIndex);
     await page.locator('#my-hand .card-3d').nth(discardVisualIndex).click();
     const opponentMotion = assertOpponentDiscardMotion(page, turnBarHeight);
+    await page.waitForTimeout(150);
+    const gapBeat = await page.evaluate(({key,left}) => {
+      const tracked=document.querySelector(`#my-hand .card-3d[data-card-key="${key}"]`);
+      return {
+        gaps:document.querySelectorAll('#my-hand .removal-gap').length,
+        trackedLeft:tracked?.getBoundingClientRect().left,
+        compacting:S._handCompacting,
+        delta:Math.abs((tracked?.getBoundingClientRect().left||0)-left),
+      };
+    }, trackedShift);
+    if(gapBeat.gaps!==1||!gapBeat.compacting||gapBeat.delta>1){
+      throw new Error(`Hand did not hold a stable removal gap: ${JSON.stringify(gapBeat)}`);
+    }
+    await capture(page, 'hand-removal-gap');
+    await page.waitForTimeout(520);
+    const shiftBeat = await page.evaluate(({key,left,width}) => {
+      const tracked=document.querySelector(`#my-hand .card-3d[data-card-key="${key}"]`);
+      const current=tracked?.getBoundingClientRect().left;
+      return {
+        gaps:document.querySelectorAll('#my-hand .removal-gap').length,
+        current,
+        moved:left-current,
+        width,
+        compacting:S._handCompacting,
+      };
+    }, trackedShift);
+    if(
+      shiftBeat.gaps!==0||
+      !shiftBeat.compacting||
+      shiftBeat.moved<2||
+      shiftBeat.moved>shiftBeat.width+18
+    ){
+      throw new Error(`Hand cards did not slide through an intermediate position: ${JSON.stringify(shiftBeat)}`);
+    }
+    await capture(page, 'hand-compaction-midshift');
     await waitForCardMotion(page);
     const landingReveal = await page.evaluate(() => ({
       keptIndex: S._keptRevealServerIdx,
@@ -403,6 +493,10 @@ async function main() {
     const stillRevealed = await page.locator('#my-hand .card-3d:last-child').evaluate(el => el.classList.contains('card-front'));
     if (!stillRevealed) throw new Error('Kept card face-up beat was too short');
     await opponentMotion;
+    const deterministicOpponentMotion = assertOpponentDiscardMotion(page, turnBarHeight);
+    const opponentTestStarted = await page.evaluate(() => buioTest.testOpponentKeepDiscard(1));
+    if (!opponentTestStarted) throw new Error('Could not start deterministic opponent hand compaction');
+    await deterministicOpponentMotion;
     await page.waitForFunction(() =>
       S._keptRevealServerIdx === null &&
       document.querySelector('#my-hand .card-3d:last-child')?.classList.contains('card-back'),
@@ -454,6 +548,7 @@ async function main() {
     await waitForCardMotion(page2);
     await page2.close();
     await assertMobileAttackOverlay(browser);
+    await assertMobileHandCompaction(browser);
 
     if (browserIssues.length) {
       throw new Error(`Browser issues:\n${browserIssues.join('\n')}`);

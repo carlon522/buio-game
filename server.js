@@ -401,6 +401,7 @@ function presentAttack(roomId, attacker, discardCard, result) {
     discardCard: discardCard || null,
     success: result.success,
     penaltyCard: result.penaltyCard || null,
+    cardIndex: result.cardIndex,
   });
 
   if (result.penaltyCard) {

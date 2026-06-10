@@ -262,6 +262,12 @@ input,select{font-family:inherit}
 .card-3d.atk-tgt{cursor:pointer}
 .card-3d.atk-tgt:hover{transform:translateY(-8px);box-shadow:0 0 20px rgba(231,76,60,.7),0 8px 18px rgba(0,0,0,.5)!important}
 .card-3d.atk-tgt.selected{box-shadow:0 0 0 3px var(--danger),0 14px 28px rgba(0,0,0,.5)!important}
+.card-3d.removal-gap{
+  background:rgba(255,255,255,.015)!important;border:1px dashed rgba(240,160,48,.38)!important;
+  box-shadow:inset 0 0 18px rgba(240,160,48,.04)!important;pointer-events:none;
+}
+.card-3d.removal-gap::before{background:none!important;border:0!important}
+.card-3d.removal-gap::after{display:none!important}
 
 /* ── Animations ──────────────────────────────────────────────────────────── */
 @keyframes card-appear{from{transform:translateY(-18px) scale(.85);opacity:0}to{transform:none;opacity:1}}
@@ -422,6 +428,8 @@ input,select{font-family:inherit}
 .mini-card::after{content:'B';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:900;font-style:italic;color:rgba(196,133,59,.45)}
 .mini-card.opp-drawn-card{margin-left:5px;box-shadow:0 0 0 1px rgba(240,160,48,.5),1px 2px 5px rgba(0,0,0,.5)}
 .mini-card.motion-hidden{visibility:hidden}
+.mini-card.mini-gap{background:rgba(255,255,255,.02);border-style:dashed;box-shadow:none}
+.mini-card.mini-gap::after{display:none}
 .card-new-pop{animation:card-pop-in .32s cubic-bezier(.34,1.56,.64,1) both}
 @keyframes card-pop-in{from{transform:scale(0) translateY(6px);opacity:0}to{transform:scale(1);opacity:1}}
 /* Reserve the incoming card's space but keep it invisible until the draw ghost lands */
