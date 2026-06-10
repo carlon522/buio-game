@@ -413,7 +413,7 @@ class GameRoom {
       }
       player.seenCards = newSeen;
       this.discardPile.push(attackCard);
-      return { success: true, revealedCard: attackCard };
+      return { success: true, revealedCard: attackCard, cardIndex };
     } else {
       // ❌ Wrong — add an extra card from deck as penalty
       let penaltyCard = null;
@@ -421,7 +421,7 @@ class GameRoom {
         penaltyCard = this.deck.pop();
         player.hand.push(penaltyCard); // face-down, not in seenCards
       }
-      return { success: false, revealedCard: attackCard, penaltyCard };
+      return { success: false, revealedCard: attackCard, penaltyCard, cardIndex };
     }
   }
 

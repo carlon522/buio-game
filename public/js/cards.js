@@ -222,6 +222,45 @@ const Cards = (() => {
     });
   }
 
+  function discardHandToPile(handSlotRect, pileRect, card, onLand) {
+    fly({
+      from: handSlotRect,
+      to: pileRect,
+      card,
+      duration: D.discard,
+      arc: -72,
+      spin: -9,
+      z: 9999,
+      onDone: removeOnDone(onLand),
+    });
+  }
+
+  function keepDrawnToHand(drawnSlotRect, appendSlotRect, card, onLand) {
+    fly({
+      from: drawnSlotRect,
+      to: appendSlotRect,
+      card,
+      duration: D.keep + 180,
+      arc: -24,
+      spin: 4,
+      z: 9998,
+      onDone: removeOnDone(onLand),
+    });
+  }
+
+  function forcedReplacement(deckRect, appendSlotRect, onLand) {
+    fly({
+      from: deckRect,
+      to: appendSlotRect,
+      face: 'down',
+      duration: D.keep + 180,
+      arc: -26,
+      spin: 4,
+      z: 9998,
+      onDone: removeOnDone(onLand),
+    });
+  }
+
   function forcedDiscard(opts) {
     fly({
       from: opts.handSlotRect,
@@ -328,6 +367,9 @@ const Cards = (() => {
     penaltyDraw,
     discardDrawnCard,
     discardHandCard,
+    discardHandToPile,
+    keepDrawnToHand,
+    forcedReplacement,
     forcedDiscard,
     attackCard,
     oppDraw,

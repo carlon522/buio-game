@@ -135,6 +135,7 @@ function makeStartedRoom() {
   const result = room.attack('p1', 1);
 
   assert.strictEqual(result.success, true);
+  assert.strictEqual(result.cardIndex, 1);
   assert.strictEqual(player.hand.length, 3);
   assert.strictEqual(room.discardPile.at(-1).value, 7);
 }
@@ -149,6 +150,7 @@ function makeStartedRoom() {
   const result = room.attack('p1', 1);
 
   assert.strictEqual(result.success, false);
+  assert.strictEqual(result.cardIndex, 1);
   assert.strictEqual(player.hand.length, 5);
   assert.strictEqual(player.hand.at(-1).value, 3);
   assert.strictEqual(room.discardPile.at(-1).value, 9);
