@@ -97,6 +97,19 @@ function makeStartedRoom() {
 }
 
 {
+  const player = {
+    hand: [makeCard(2), makeCard(7), makeCard(4), makeCard(9)],
+    seenCards: new Set([0, 1, 3]),
+  };
+  assert.deepStrictEqual(
+    BotStrategy.chooseAttack(player, makeCard(7, 'coppe'), 'hard', () => 0),
+    { cardIndex: 1, expectedSuccess: true }
+  );
+  assert.strictEqual(BotStrategy.chooseAttack(player, makeCard(4), 'hard', () => 0.5), null);
+  assert.ok(BotStrategy.getTiming('easy').think[0] > BotStrategy.getTiming('hard').think[1]);
+}
+
+{
   const room = makeStartedRoom();
   const player = room.players[0];
   player.hand = [makeCard(4), makeCard(7), makeCard(2), makeCard(5)];

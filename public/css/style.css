@@ -154,6 +154,21 @@ input,select{font-family:inherit}
 .trophy{font-size:4rem;animation:trophy-in .6s ease-out}
 .gameover-sub{font-size:.82rem;color:rgba(255,248,240,.45);margin-top:-.4rem;font-style:italic}
 @keyframes trophy-in{from{transform:scale(.3) rotate(-20deg);opacity:0}to{transform:none;opacity:1}}
+.round-count-overlay{z-index:12500;background:rgba(0,0,0,.9);backdrop-filter:blur(10px)}
+.round-count-card{
+  width:min(92vw,430px);padding:2.2rem 1.5rem;text-align:center;
+  border-top:2px solid var(--gold);border-bottom:2px solid var(--gold);
+  background:rgba(16,6,0,.96);box-shadow:0 24px 80px rgba(0,0,0,.9);
+  animation:count-card-in .35s cubic-bezier(.25,.46,.45,.94);
+}
+.round-count-kicker{font-size:.72rem;font-weight:900;letter-spacing:.14em;color:var(--danger);margin-bottom:.5rem}
+.round-count-card h2{font-size:1.65rem;color:#fff4df;text-shadow:0 0 24px rgba(240,160,48,.2)}
+.round-count-dots{display:flex;justify-content:center;gap:.45rem;margin-top:1.2rem}
+.round-count-dots span{width:8px;height:8px;border-radius:50%;background:var(--gold);animation:count-dot .9s infinite}
+.round-count-dots span:nth-child(2){animation-delay:.15s}
+.round-count-dots span:nth-child(3){animation-delay:.3s}
+@keyframes count-card-in{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes count-dot{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-8px);opacity:1}}
 
 /* ── CARDS ───────────────────────────────────────────────────────────────── */
 /* Simple, reliable — no CSS 3D / backface-visibility tricks */
@@ -215,6 +230,13 @@ input,select{font-family:inherit}
   cursor:default!important;
   will-change:left,top,width,height,transform;
   transform-origin:center center;
+}
+.deal-hidden{visibility:hidden}
+.card-turn-in{animation:card-turn-in .58s cubic-bezier(.25,.46,.45,.94) both;transform-origin:center}
+@keyframes card-turn-in{
+  0%{transform:perspective(700px) rotateY(90deg) scale(.96)}
+  55%{transform:perspective(700px) rotateY(-8deg) scale(1.02)}
+  100%{transform:perspective(700px) rotateY(0) scale(1)}
 }
 
 /* Fallback text when image is missing */

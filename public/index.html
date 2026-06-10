@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0e0800">
 <title>BUIO – Gioco di Carte</title>
-<link rel="stylesheet" href="/css/style.css?v=54">
+<link rel="stylesheet" href="/css/style.css?v=55">
 </head>
 <body class="screen-auth-active">
 <div id="app-version" class="app-version" aria-label="Versione gioco">v1.0.0</div>
@@ -124,6 +124,14 @@
       <p id="special-desc" class="hint-text"></p>
       <div id="special-actions" class="special-actions"></div>
       <button id="btn-special-skip" class="btn-ghost skip-btn">Salta</button>
+    </div>
+  </div>
+
+  <div id="panel-count-cards" class="panel-overlay round-count-overlay hidden">
+    <div class="round-count-card">
+      <div id="count-cards-kicker" class="round-count-kicker">GAME END!</div>
+      <h2 id="count-cards-title">Count the cards.</h2>
+      <div class="round-count-dots"><span></span><span></span><span></span></div>
     </div>
   </div>
 
@@ -299,7 +307,7 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-<script src="/js/cards.js?v=10"></script>
-<script src="/js/app.js?v=57"></script>
+<script src="/js/cards.js?v=11"></script>
+<script src="/js/app.js?v=58"></script>
 </body>
 </html>

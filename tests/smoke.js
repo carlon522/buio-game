@@ -93,8 +93,33 @@ async function registerAndStartBotGame(page, suffix) {
 
   await page.click('label[for="bot-hard"]');
   await page.click('#btn-vs-bot');
+  await page.waitForSelector('.deal-card-ghost', { timeout: 5000 });
+  const dealMidflight = await page.evaluate(() => ({
+    ghosts: document.querySelectorAll('.deal-card-ghost').length,
+    hiddenSlots: [...document.querySelectorAll('#my-hand .card-3d,.seat .mini-card')]
+      .filter(card => getComputedStyle(card).visibility === 'hidden').length,
+    enabledActions: [...document.querySelectorAll('#btn-draw,#btn-knock,#btn-attack,#btn-discard-drawn')]
+      .filter(button => !button.disabled).length,
+    turnText: document.querySelector('#turn-bar-text')?.textContent || '',
+  }));
+  if (
+    dealMidflight.ghosts < 1 ||
+    dealMidflight.hiddenSlots < 1 ||
+    dealMidflight.enabledActions !== 0 ||
+    !/Dealing|Distribuzione/.test(dealMidflight.turnText)
+  ) {
+    throw new Error(`Opening deal exposed cards before landing: ${JSON.stringify(dealMidflight)}`);
+  }
+  await capture(page, 'opening-deal-midflight');
+  await page.waitForFunction(() =>
+    document.querySelectorAll('.deal-card-ghost').length === 0 &&
+    S._dealLanded?.size === S.gameState?.players.reduce((sum, player) => sum + player.cardCount, 0),
+    null,
+    { timeout: 8000 }
+  );
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 10000 });
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof _dealBusy !== 'undefined' && !_dealBusy, null, { timeout: 5000 });
   await assertVersionBadge(page, 'game');
   const difficulty = await page.evaluate(() => S.gameState?.botDifficulty);
   if (difficulty !== 'hard') throw new Error(`Bot difficulty was not applied: ${difficulty}`);
@@ -107,6 +132,11 @@ async function drawCard(page) {
     Boolean(document.querySelector('#drawn-card-display .card-3d')),
     null,
     { timeout: 7000 }
+  );
+  await page.waitForFunction(() =>
+    document.querySelector('#drawn-card-display .card-3d')?.classList.contains('card-turn-in'),
+    null,
+    { timeout: 3000 }
   );
 }
 
@@ -149,7 +179,20 @@ async function assertStableTurnBar(page, expectedHeight = null) {
 }
 
 async function assertOpponentDiscardMotion(page, turnBarHeight) {
-  await page.waitForSelector('.opp-discard-ghost', { timeout: 15000 });
+  try {
+    await page.waitForSelector('.opp-discard-ghost', { timeout: 15000 });
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => ({
+      phase: S.gameState?.phase,
+      currentPlayerUserId: S.gameState?.currentPlayerUserId,
+      selfUserId: S.userId,
+      attackOverlay: Boolean(document.querySelector('.atk-reveal-overlay')),
+      attackAnnouncer: S._attackAnnouncer,
+      opponentMotions: S._oppMotions,
+      log: S.gameLog?.slice(0, 8),
+    }));
+    throw new Error(`Opponent never discarded: ${JSON.stringify(diagnostic)}`);
+  }
   const during = await page.evaluate(() => ({
     discardGhosts: document.querySelectorAll('.opp-discard-ghost').length,
     keepGhosts: document.querySelectorAll('.opp-keep-ghost').length,
@@ -222,7 +265,73 @@ async function assertMobileAttackOverlay(browser) {
   }
 }
 
+async function assertPenaltyAfterPopup(page) {
+  const botId = await page.evaluate(() =>
+    S.gameState?.players.find(player => String(player.userId) !== String(S.userId))?.userId
+  );
+  await page.evaluate(userId => {
+    buioTest.testReveal(false);
+    setTimeout(() => buioTest.testPenalty(userId), 5500);
+  }, botId);
+  await page.waitForSelector('.atk-reveal-overlay');
+  await page.waitForSelector('.penalty-draw-ghost', { timeout: 7000 });
+  const state = await page.evaluate(() => ({
+    attackOverlay: Boolean(document.querySelector('.atk-reveal-overlay')),
+    penaltyGhosts: document.querySelectorAll('.penalty-draw-ghost').length,
+  }));
+  if (state.attackOverlay || state.penaltyGhosts !== 1) {
+    throw new Error(`Penalty draw overlapped the attack popup: ${JSON.stringify(state)}`);
+  }
+  await page.waitForFunction(() => document.querySelectorAll('.penalty-draw-ghost').length === 0, null, { timeout: 3000 });
+}
+
+async function assertRoundEndSequence(page) {
+  await page.evaluate(() => buioTest.testRoundEnd());
+  await page.waitForSelector('#panel-count-cards:not(.hidden)');
+  const countState = await page.evaluate(() => ({
+    scoringHidden: document.querySelector('#panel-scoring')?.classList.contains('hidden'),
+    countText: document.querySelector('#count-cards-title')?.textContent,
+  }));
+  if (!countState.scoringHidden || !countState.countText) {
+    throw new Error(`Count-cards transition was skipped: ${JSON.stringify(countState)}`);
+  }
+  await capture(page, 'count-cards-transition');
+  await page.waitForSelector('#panel-scoring:not(.hidden)', { timeout: 4000 });
+  await page.waitForTimeout(1300);
+  const scores = await page.evaluate(() => [...document.querySelectorAll('#scoring-list .score-val')].map(el => ({
+    shown: Number(el.textContent),
+    target: Number(el.dataset.score),
+  })));
+  if (!scores.length || scores.some(score => score.shown !== score.target)) {
+    throw new Error(`Score count-up did not finish: ${JSON.stringify(scores)}`);
+  }
+  await capture(page, 'score-count-complete');
+}
+
+async function assertSoundDeduplication(page) {
+  const plays = await page.evaluate(() => {
+    const RealAudio = window.Audio;
+    let count = 0;
+    window.Audio = class {
+      constructor(){ count++; this.volume=1; this.currentTime=0; this.loop=false; }
+      play(){ return Promise.resolve(); }
+      pause(){}
+    };
+    SFX._last.SoundProbe = 0;
+    SFX.play('SoundProbe', 0.5, { cooldown: 500 });
+    SFX.play('SoundProbe', 0.5, { cooldown: 500 });
+    window.Audio = RealAudio;
+    return count;
+  });
+  if (plays !== 1) throw new Error(`Sound cooldown allowed ${plays} duplicate plays`);
+}
+
 async function main() {
+  for (const file of ['Drumlooppostknock.mp3', 'Matchend.mp3']) {
+    if (!fs.existsSync(path.join(ROOT, 'public', 'SFX', file))) {
+      throw new Error(`Missing finale sound: ${file}`);
+    }
+  }
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
@@ -281,6 +390,7 @@ async function main() {
       return visual >= 0 ? visual : 0;
     });
     await page.locator('#my-hand .card-3d').nth(discardVisualIndex).click();
+    const opponentMotion = assertOpponentDiscardMotion(page, turnBarHeight);
     await waitForCardMotion(page);
     const landingReveal = await page.evaluate(() => ({
       keptIndex: S._keptRevealServerIdx,
@@ -292,7 +402,7 @@ async function main() {
     await page.waitForTimeout(1100);
     const stillRevealed = await page.locator('#my-hand .card-3d:last-child').evaluate(el => el.classList.contains('card-front'));
     if (!stillRevealed) throw new Error('Kept card face-up beat was too short');
-    await assertOpponentDiscardMotion(page, turnBarHeight);
+    await opponentMotion;
     await page.waitForFunction(() =>
       S._keptRevealServerIdx === null &&
       document.querySelector('#my-hand .card-3d:last-child')?.classList.contains('card-back'),
@@ -319,6 +429,9 @@ async function main() {
       throw new Error(`Swap animation selected wrong slots: ${JSON.stringify(swapSlots)}`);
     }
     await page.evaluate(() => document.querySelector('.swap-overlay')?.remove());
+    await assertPenaltyAfterPopup(page);
+    await assertSoundDeduplication(page);
+    await assertRoundEndSequence(page);
 
 
     const page2 = await browser.newPage();
@@ -349,7 +462,7 @@ async function main() {
       throw new Error(`Resource issues:\n${resourceIssues.join('\n')}`);
     }
 
-    console.log('Smoke test passed: card flows, opponent motion state, stable turn bar, and attack overlay.');
+    console.log('Smoke test passed: deal, card flows, opponent state, attacks, penalty timing, finale, audio, and responsive overlays.');
   } catch (err) {
     console.error(err.message);
     if (serverOutput.trim()) console.error('\nServer output:\n' + serverOutput.trim());
