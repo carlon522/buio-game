@@ -217,7 +217,7 @@ input,select{font-family:inherit}
 .card-front img.card-img{
   width:100%;height:100%;object-fit:contain;display:block;
   pointer-events:none;opacity:0;position:relative;z-index:2;
-  transition:opacity .12s ease;
+  transition:none;
 }
 .card-front.image-ready{background:#f5f0e8;border-color:rgba(0,0,0,.12)}
 .card-front.image-ready::before,.card-front.image-ready::after{display:none}
@@ -503,7 +503,7 @@ input,select{font-family:inherit}
   width:var(--cw);height:var(--ch);border-radius:var(--cr);
   border:2px dashed rgba(255,255,255,.15);
   display:flex;align-items:center;justify-content:center;
-  overflow:hidden;background:rgba(0,0,0,.22);position:relative;
+  overflow:visible;background:rgba(0,0,0,.22);position:relative;
   transition:box-shadow .2s;
 }
 #discard-pile.atk-target{
@@ -511,8 +511,22 @@ input,select{font-family:inherit}
   animation:pile-atk 1s ease-in-out infinite;
 }
 @keyframes pile-atk{0%,100%{box-shadow:0 0 0 2px var(--danger),0 0 14px rgba(231,76,60,.4)}50%{box-shadow:0 0 0 3px var(--danger),0 0 28px rgba(231,76,60,.8)}}
-.discard-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:transparent;opacity:0;transition:opacity .12s}
-.discard-slot.discard-image-ready img{opacity:1}
+.discard-card-layer{
+  position:absolute;inset:0;border-radius:var(--cr);overflow:hidden;
+  background:linear-gradient(145deg,#1a0900 0%,#3d2000 50%,#1a0900 100%);
+  border:1px solid rgba(196,133,59,.44);box-shadow:2px 4px 10px rgba(0,0,0,.42);
+  transform-origin:center;transition:none;
+}
+.discard-card-layer::after{
+  content:'B';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:rgba(196,133,59,.52);font-size:1.5rem;font-weight:900;font-style:italic;
+}
+.discard-card-layer img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;z-index:2}
+.discard-card-layer.image-ready,.discard-card-layer.image-error{background:#f5f0e8;border-color:rgba(0,0,0,.12)}
+.discard-card-layer.image-ready::after,.discard-card-layer.image-error::after{display:none}
+.discard-card-layer.image-ready img{opacity:1}
+.discard-card-under{z-index:1;transform:translate(2px,2px) rotate(-1.2deg)}
+.discard-card-top{z-index:2;transform:none}
 .discard-slot .card-fb{border-radius:var(--cr)}
 .discard-empty{font-size:1rem;color:rgba(255,255,255,.15)}
 

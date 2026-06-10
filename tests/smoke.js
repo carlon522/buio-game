@@ -120,6 +120,12 @@ async function registerAndStartBotGame(page, suffix) {
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 10000 });
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 10000 });
   await page.waitForFunction(() => typeof _dealBusy !== 'undefined' && !_dealBusy, null, { timeout: 5000 });
+  await page.waitForFunction(() =>
+    !S.gameState?.turnReadyAt || Date.now() >= S.gameState.turnReadyAt,
+    null,
+    { timeout: 5000 }
+  );
+  await page.waitForFunction(() => !document.querySelector('#btn-draw')?.disabled, null, { timeout: 5000 });
   await assertVersionBadge(page, 'game');
   const difficulty = await page.evaluate(() => S.gameState?.botDifficulty);
   if (difficulty !== 'hard') throw new Error(`Bot difficulty was not applied: ${difficulty}`);
@@ -159,6 +165,101 @@ async function assertDecodedCardFronts(page) {
     return !card.classList.contains('image-ready') && (bg === 'rgb(255, 255, 255)' || bg === 'rgb(245, 240, 232)');
   }));
   if (blank) throw new Error('A card front exposed a white loading frame');
+}
+
+async function assertSingleCardFlipStability(page) {
+  const setup = await page.evaluate(() => {
+    const cards=[...document.querySelectorAll('#my-hand .card-3d[data-card-key]')];
+    const target=cards.find(card => {
+      const serverIndex=Number(card.dataset.serverIndex);
+      return Boolean(S.privateState?.hand?.[serverIndex]?.known);
+    });
+    if(!target) return null;
+    window.__smokeHandNodes=cards.map(card=>[card.dataset.cardKey,card]);
+    S._tempRevealServerIdx=Number(target.dataset.serverIndex);
+    renderMyHand();
+    return target.dataset.cardKey;
+  });
+  if (!setup) throw new Error('No known card was available for the flip stability check');
+
+  await assertDecodedCardFronts(page);
+  const result = await page.evaluate(targetKey => {
+    const current=new Map(
+      [...document.querySelectorAll('#my-hand .card-3d[data-card-key]')]
+        .map(card=>[card.dataset.cardKey,card])
+    );
+    const stable=window.__smokeHandNodes.every(([key,node]) =>
+      key===targetKey || current.get(key)===node
+    );
+    const target=current.get(targetKey);
+    const ready=Boolean(target?.classList.contains('card-front') && target.classList.contains('image-ready'));
+    S._tempRevealServerIdx=null;
+    renderMyHand();
+    delete window.__smokeHandNodes;
+    return {stable,ready,count:current.size};
+  }, setup);
+  if (!result.stable || !result.ready) {
+    throw new Error(`Flipping one card disturbed the rest of the hand: ${JSON.stringify(result)}`);
+  }
+}
+
+async function assertTurnHandoff(page) {
+  await page.waitForFunction(() => S.gameState?.turnReadyAt > Date.now(), null, { timeout: 5000 });
+  const initial = await page.evaluate(() => ({
+    remaining:S.gameState.turnReadyAt-Date.now(),
+    drawDisabled:document.querySelector('#btn-draw')?.disabled,
+    knockDisabled:document.querySelector('#btn-knock')?.disabled,
+    discardDisabled:document.querySelector('#btn-discard-drawn')?.disabled,
+    banner:document.querySelector('#turn-bar-text')?.textContent || '',
+  }));
+  if (
+    initial.remaining < 1800 ||
+    !initial.drawDisabled ||
+    !initial.knockDisabled ||
+    !initial.discardDisabled ||
+    !/Attack window|Finestra attacco/.test(initial.banner)
+  ) {
+    throw new Error(`Turn handoff was not stable or long enough: ${JSON.stringify(initial)}`);
+  }
+
+  await page.waitForFunction(() => !S._handCompacting, null, { timeout: 5000 });
+  const attackWindow = await page.evaluate(() => ({
+    remaining:S.gameState.turnReadyAt-Date.now(),
+    attackDisabled:document.querySelector('#btn-attack')?.disabled,
+  }));
+  if (attackWindow.remaining > 100 && attackWindow.attackDisabled) {
+    throw new Error(`Attack stayed disabled during the handoff: ${JSON.stringify(attackWindow)}`);
+  }
+}
+
+async function assertDiscardPileLanding(page, previousTopId) {
+  await page.waitForFunction(() =>
+    Boolean(S._skipDiscard && document.querySelector('.card-ghost')),
+    null,
+    { timeout: 2500 }
+  );
+  const inFlight = await page.evaluate(() => ({
+    top:document.querySelector('#discard-pile .discard-card-top')?.dataset.cardId || null,
+    layers:document.querySelectorAll('#discard-pile .discard-card-layer').length,
+  }));
+  if (inFlight.top !== previousTopId || inFlight.layers < 1) {
+    throw new Error(`Discard pile changed before the moving card landed: ${JSON.stringify(inFlight)}`);
+  }
+
+  await waitForCardMotion(page);
+  await page.waitForFunction(oldTop => {
+    const top=document.querySelector('#discard-pile .discard-card-top');
+    const under=document.querySelector('#discard-pile .discard-card-under');
+    return Boolean(top && under && top.dataset.cardId!==oldTop && under.dataset.cardId===oldTop);
+  }, previousTopId, { timeout: 3000 });
+  const landed = await page.evaluate(() => ({
+    layers:document.querySelectorAll('#discard-pile .discard-card-layer').length,
+    topReady:document.querySelector('#discard-pile .discard-card-top')?.classList.contains('image-ready'),
+    underReady:document.querySelector('#discard-pile .discard-card-under')?.classList.contains('image-ready'),
+  }));
+  if (landed.layers !== 2 || !landed.topReady || !landed.underReady) {
+    throw new Error(`Discard pile did not settle as a decoded two-card stack: ${JSON.stringify(landed)}`);
+  }
 }
 
 async function assertStableTurnBar(page, expectedHeight = null) {
@@ -334,6 +435,65 @@ async function assertPenaltyAfterPopup(page) {
   await page.waitForFunction(() => document.querySelectorAll('.penalty-draw-ghost').length === 0, null, { timeout: 3000 });
 }
 
+async function assertBotResumesAfterHumanAttack(browser) {
+  const page = await browser.newPage();
+  try {
+    await registerAndStartBotGame(page, 'attack-resume');
+    const botId = await page.evaluate(() =>
+      S.gameState.players.find(player => String(player.userId) !== String(S.userId))?.userId
+    );
+    await page.evaluate(id => {
+      window.__smokeBotAttackReveals=0;
+      socket.on('game:attack-reveal', payload => {
+        if(String(payload.attackerUserId)===String(id)) window.__smokeBotAttackReveals++;
+      });
+    }, botId);
+
+    await drawCard(page);
+    const discardVisualIndex = await page.evaluate(async () => {
+      const debug=await fetch(`/api/debug/room/${S.currentRoomId}`).then(response=>response.json());
+      const self=debug.players.find(player=>String(player.userId)===String(S.userId));
+      const discard=self.hand.find(card=>![8,9].includes(card.value));
+      return discard ? S.handOrder.indexOf(discard.pos) : -1;
+    });
+    if (discardVisualIndex < 0) throw new Error('Could not find a deterministic non-special discard');
+    await page.locator('#my-hand .card-3d').nth(discardVisualIndex).click();
+    await assertTurnHandoff(page);
+
+    const mismatchVisualIndex = await page.evaluate(async () => {
+      const debug=await fetch(`/api/debug/room/${S.currentRoomId}`).then(response=>response.json());
+      const self=debug.players.find(player=>String(player.userId)===String(S.userId));
+      const mismatch=self.hand.find(card=>card.value!==debug.discardTop.value);
+      return mismatch ? S.handOrder.indexOf(mismatch.pos) : -1;
+    });
+    if (mismatchVisualIndex < 0) throw new Error('Could not find a deterministic wrong attack card');
+
+    await page.evaluate(() => document.querySelector('#btn-attack').click());
+    await page.locator('#my-hand .card-3d').nth(mismatchVisualIndex).click();
+    await page.waitForSelector('.atk-reveal-overlay');
+    await page.waitForFunction(() =>
+      /WRONG|SBAGLIATO/.test(document.querySelector('#ar-res:not(.ar-hidden)')?.textContent || ''),
+      null,
+      { timeout: 4500 }
+    );
+    await page.waitForFunction(() =>
+      !S._attackRevealActive && !S.gameState?.presentationActive,
+      null,
+      { timeout: 9000 }
+    );
+    await page.waitForFunction(id =>
+      String(S.gameState?.currentPlayerUserId)!==String(id) ||
+      S.gameState?.phase==='discard' ||
+      Boolean(S._oppDrawn?.[id]) ||
+      window.__smokeBotAttackReveals>0,
+      botId,
+      { timeout: 12000 }
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 async function assertRoundEndSequence(page) {
   await page.evaluate(() => buioTest.testRoundEnd());
   await page.waitForSelector('#panel-count-cards:not(.hidden)');
@@ -425,6 +585,7 @@ async function main() {
     const turnBarHeight = await assertStableTurnBar(page);
     await drawCard(page);
     await assertDecodedCardFronts(page);
+    await assertSingleCardFlipStability(page);
     await assertStableTurnBar(page, turnBarHeight);
     const beforeKeep = await page.evaluate(() => ({
       handCount: document.querySelectorAll('#my-hand .card-3d').length,
@@ -444,7 +605,10 @@ async function main() {
       const rect=tracked.getBoundingClientRect();
       return {key:tracked.dataset.cardKey,left:rect.left,width:rect.width};
     }, discardVisualIndex);
+    const previousDiscardTop = await page.locator('#discard-pile .discard-card-top').getAttribute('data-card-id');
     await page.locator('#my-hand .card-3d').nth(discardVisualIndex).click();
+    const handoff = assertTurnHandoff(page);
+    const pileLanding = assertDiscardPileLanding(page, previousDiscardTop);
     const opponentMotion = assertOpponentDiscardMotion(page, turnBarHeight);
     await page.waitForTimeout(150);
     const gapBeat = await page.evaluate(({key,left}) => {
@@ -481,7 +645,8 @@ async function main() {
       throw new Error(`Hand cards did not slide through an intermediate position: ${JSON.stringify(shiftBeat)}`);
     }
     await capture(page, 'hand-compaction-midshift');
-    await waitForCardMotion(page);
+    await handoff;
+    await pileLanding;
     const landingReveal = await page.evaluate(() => ({
       keptIndex: S._keptRevealServerIdx,
       rightFaceUp: document.querySelector('#my-hand .card-3d:last-child')?.classList.contains('card-front'),
@@ -544,9 +709,14 @@ async function main() {
 
     await registerAndStartBotGame(page2, 'drop');
     await drawCard(page2);
+    const previousDropTop = await page2.locator('#discard-pile .discard-card-top').getAttribute('data-card-id');
     await page2.click('#btn-discard-drawn');
-    await waitForCardMotion(page2);
+    await Promise.all([
+      assertTurnHandoff(page2),
+      assertDiscardPileLanding(page2, previousDropTop),
+    ]);
     await page2.close();
+    await assertBotResumesAfterHumanAttack(browser);
     await assertMobileAttackOverlay(browser);
     await assertMobileHandCompaction(browser);
 
@@ -559,7 +729,7 @@ async function main() {
 
     console.log('Smoke test passed: deal, card flows, opponent state, attacks, penalty timing, finale, audio, and responsive overlays.');
   } catch (err) {
-    console.error(err.message);
+    console.error(err.stack || err.message);
     if (serverOutput.trim()) console.error('\nServer output:\n' + serverOutput.trim());
     process.exitCode = 1;
   } finally {

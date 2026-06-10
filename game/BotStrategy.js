@@ -4,17 +4,17 @@ const PROFILES = {
   easy: {
     knownCardUse: 0.35, keepImprovement: 4, knockScore: 16, knockConfidence: 0.45,
     attackChance: 0.38, mistakeChance: 0.12,
-    timing: { think: [1900, 3100], reach: [750, 1250], inspect: [1600, 2600], special: [1000, 1700], attack: [1800, 2800] },
+    timing: { think: [2800, 4200], reach: [1100, 1700], inspect: [2300, 3400], special: [1500, 2300], attack: [3300, 4600] },
   },
   medium: {
     knownCardUse: 0.8, keepImprovement: 1, knockScore: 11, knockConfidence: 0.5,
     attackChance: 0.72, mistakeChance: 0.045,
-    timing: { think: [950, 1800], reach: [420, 760], inspect: [900, 1500], special: [600, 1050], attack: [950, 1550] },
+    timing: { think: [1900, 2900], reach: [800, 1250], inspect: [1500, 2300], special: [1000, 1600], attack: [2400, 3400] },
   },
   hard: {
     knownCardUse: 1, keepImprovement: 0, knockScore: 13, knockConfidence: 0.5,
     attackChance: 0.96, mistakeChance: 0.008,
-    timing: { think: [420, 820], reach: [240, 440], inspect: [480, 850], special: [360, 650], attack: [420, 760] },
+    timing: { think: [1250, 2000], reach: [650, 950], inspect: [1050, 1600], special: [750, 1150], attack: [1700, 2500] },
   },
 };
 
