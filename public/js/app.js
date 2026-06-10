@@ -35,6 +35,17 @@ let _dragIdx = null; // index being dragged
 function showScreen(n) {
   document.querySelectorAll('.screen').forEach(s=>{ s.classList.remove('active'); s.classList.add('hidden'); });
   const sc=$('screen-'+n); if(sc){ sc.classList.remove('hidden'); sc.classList.add('active'); }
+  document.body.classList.remove('screen-auth-active','screen-lobby-active','screen-game-active');
+  document.body.classList.add(`screen-${n}-active`);
+}
+
+async function hydrateAppVersion() {
+  try {
+    const res = await fetch('/api/version');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.version) $('app-version').textContent = `v${data.version}`;
+  } catch (_) {}
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -1627,6 +1638,7 @@ function applyLang() {
 
 (function(){
   S._selIdx=-1;
+  hydrateAppVersion();
   applyLang(); // apply saved language on load
   // Set mute button icon from saved preference
   const btn=$('mute-btn');
