@@ -24,6 +24,7 @@ const S = {
   gameLog:[], _selIdx:-1,
   _atkCdInt:null,
   _oppDrawn:null,           // opponent userId -> true while they hold a drawn card
+  _oppMotions:null,         // opponent userId -> in-flight source/destination state
 };
 
 const socket = io({ autoConnect: false });
@@ -130,6 +131,8 @@ function resetMotionState() {
   S._pendingDiscardCard=null;
   S._animSlot=null;
   S._animHidden=null;
+  if(S._oppMotions) Object.values(S._oppMotions).forEach(m=>clearTimeout(m.timeout));
+  S._oppMotions=null;
   S._attackMode=false;
   S._attackAnnouncer=null;
   $('discard-pile')?.classList.remove('atk-target');
@@ -267,6 +270,7 @@ $('btn-leave-room').addEventListener('click',()=>{
 // ── Game state ────────────────────────────────────────────────────────────
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
+  reconcileOpponentMotions(state);
   // If state arrives while attack reveal is active, unblock game immediately
   if(S._attackRevealActive){ S._attackRevealActive=false; resetMotionState(); }
   S.gameState=state;
@@ -308,12 +312,13 @@ socket.on('game:turn-start',({userId,username})=>{
 });
 socket.on('game:starting',()=>{
   _dealBusy=true; _pendingPeek=null;
+  if(S._oppMotions) Object.values(S._oppMotions).forEach(m=>clearTimeout(m.timeout));
   // Safety: if game:state/peek never arrives, unlock after 20s
   clearTimeout(window._dealBusyFallback);
   window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
   S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._attackAnnouncer=null;
-  S._animHidden=null;S._oppDrawn=null;
+  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -432,6 +437,7 @@ $('btn-ready').addEventListener('click',()=>{
 // ── Board ─────────────────────────────────────────────────────────────────
 function renderBoard() {
   const gs=S.gameState;if(!gs)return;
+  if(gs.phase!=='peek') hide($('peek-inline'));
   $('info-round').textContent=gs.roundNumber||1;
   gs.lastRound?show($('last-round-pill')):hide($('last-round-pill'));
   renderDeck(gs.deckCount);renderDiscardPile(gs.discardTop);
@@ -447,10 +453,10 @@ function renderTurnBanner() {
   $('info-round').textContent=gs.roundNumber||1;
   gs.lastRound?show($('last-round-pill')):hide($('last-round-pill'));
 
-  function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; show(bar); }
+  function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; }
 
   const myPlayer=gs?.players.find(p=>p.userId===S.userId);
-  if(myPlayer?.isEliminated){ hide(bar); return; }
+  if(myPlayer?.isEliminated){ setBar('other-turn','Spettatore'); return; }
   if(S._attackMode){ setBar('attack-time','⚔ Scegli carta!');return; }
   if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Scarta prima!');return; }
   if(isMe){
@@ -458,7 +464,7 @@ function renderTurnBanner() {
     else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta ${d.label}${d.symbol} (${d.value}pt)`:'Tieni o scarta?');}
     else setBar('my-turn','Giochi te!');
   } else {
-    hide(bar);
+    setBar('other-turn',cur?`Turno di ${cur.username}`:'In attesa del prossimo turno');
   }
 }
 
@@ -477,15 +483,23 @@ function renderSeats() {
     // hidden (reserve its space) so the card doesn't appear before the ghost lands.
     const drawing=S._drawingSet&&S._drawingSet.has(player.userId);
     const drawn=S._oppDrawn&&S._oppDrawn[player.userId];
-    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>'<div class="mini-card'+(drawing&&i===a.length-1?' mini-incoming':'')+'"></div>').join('');
-    const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}"></div>`:'';
+    const motion=getOpponentMotion(player.userId);
+    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>{
+      const incoming=drawing&&i===a.length-1;
+      const hidden=motion?.reconciled
+        ? motion.targetIndex===i && ['keep','forced'].includes(motion.kind)
+        : motion?.sourceIndex===i && motion.kind!=='discard-drawn';
+      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden?' motion-hidden':''}" data-card-index="${i}"></div>`;
+    }).join('');
+    const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}${motion?.hideDrawn?' motion-hidden':''}"></div>`:'';
+    const current=player.isCurrentPlayer&&!player.isEliminated;
     seat.innerHTML=`
       <div class="seat-cards">${minis}${drawnMini}</div>
       <div class="seat-info">
         <div class="seat-name">${esc(player.username)}</div>
         <div class="seat-lives">${livesHTML(player.lives)}</div>
       </div>
-      ${player.isCurrentPlayer&&!player.isEliminated?'<div class="seat-turn-badge">▶ Turno</div>':''}
+      <div class="seat-turn-badge${current?' active':''}">▶ Turno</div>
       ${player.isEliminated?'<div class="seat-elim-badge">☠</div>':''}`;
     container.appendChild(seat);
   });
@@ -714,6 +728,8 @@ function onHandClick(visualIdx) {
       // the pile before the attack ghost arrives
       S._skipDiscard=true;
       setTimeout(()=>{
+        S._animHidden=new Set([visualIdx]);
+        renderMyHand();
         Cards.attackCard(slotR, pileR, ()=>settleDiscardPile(), knownHandCardAtVisual(visualIdx));
       },200);
     }
@@ -1352,6 +1368,36 @@ const SFX = {
 
 // ── Opponent animation helpers ────────────────────────────────────────────
 
+function getOpponentMotion(userId) {
+  return S._oppMotions?.[String(userId)] || null;
+}
+
+function setOpponentMotion(userId, motion) {
+  S._oppMotions=S._oppMotions||{};
+  clearTimeout(S._oppMotions[String(userId)]?.timeout);
+  S._oppMotions[String(userId)]=motion;
+}
+
+function reconcileOpponentMotions(state) {
+  if(!S._oppMotions||!state?.players) return;
+  Object.entries(S._oppMotions).forEach(([userId,motion])=>{
+    const player=state.players.find(p=>String(p.userId)===String(userId));
+    if(!player) return;
+    motion.reconciled=true;
+    motion.targetIndex=Math.max(0,player.cardCount-1);
+  });
+}
+
+function finishOpponentMotion(userId) {
+  if(S._oppDrawn) delete S._oppDrawn[userId];
+  if(S._oppMotions){
+    clearTimeout(S._oppMotions[String(userId)]?.timeout);
+    delete S._oppMotions[String(userId)];
+    if(!Object.keys(S._oppMotions).length) S._oppMotions=null;
+  }
+  renderSeats();
+}
+
 function animOppDraw(userId) {
   const deckRect = Cards.rect(document.getElementById('deck-pile'));
   if (!deckRect){ S._drawingSet?.delete(userId); return; }
@@ -1392,11 +1438,11 @@ function finishOppDrawn(userId) {
   renderSeats();
 }
 
-function opponentHandSourceRect(seat, handIndex) {
+function opponentHandSource(seat, handIndex) {
   const cards=[...seat.querySelectorAll('.mini-card:not(.mini-incoming):not(.opp-drawn-card)')];
-  if(!cards.length) return Cards.rect(seat.querySelector('.seat-cards'))||Cards.rect(seat);
+  if(!cards.length) return {element:null,index:-1,rect:Cards.rect(seat.querySelector('.seat-cards'))||Cards.rect(seat)};
   const idx=Number.isInteger(handIndex)&&handIndex>=0?Math.min(handIndex,cards.length-1):cards.length-1;
-  return Cards.rect(cards[idx]);
+  return {element:cards[idx],index:idx,rect:Cards.rect(cards[idx])};
 }
 
 function animOppDiscard(userId, card, handIndex=-1, forced=false) {
@@ -1409,24 +1455,48 @@ function animOppDiscard(userId, card, handIndex=-1, forced=false) {
   S._skipDiscardFallback=setTimeout(()=>settleDiscardPile(card),2400);
   const pileRect = pile.getBoundingClientRect();
   const drawnEl=seat.querySelector('.opp-drawn-card');
+  const drawnRect=Cards.rect(drawnEl);
+  const source=opponentHandSource(seat,handIndex);
+  const handTarget=Cards.seatCardsRect(seat);
+  const kind=handIndex===-1&&drawnEl?'discard-drawn':forced?'forced':drawnEl?'keep':'hand-only';
+  const motion={
+    kind,
+    sourceIndex:source.index,
+    targetIndex:Math.max(0,seat.querySelectorAll('.mini-card:not(.opp-drawn-card)').length-1),
+    hideDrawn:!!drawnEl,
+    reconciled:false,
+  };
+  setOpponentMotion(userId,motion);
+  motion.timeout=setTimeout(()=>{
+    settleDiscardPile(card);
+    finishOpponentMotion(userId);
+  },2800);
+  source.element?.classList.add('motion-hidden');
+  drawnEl?.classList.add('motion-hidden');
 
   if(handIndex===-1 && drawnEl){
-    Cards.oppDiscard(Cards.rect(drawnEl), pileRect, ()=>{
+    Cards.oppDiscard(drawnRect, pileRect, ()=>{
       settleDiscardPile(card);
-      finishOppDrawn(userId);
+      finishOpponentMotion(userId);
     }, {...card,known:true}, 'auto');
     return;
   }
 
-  Cards.oppDiscard(opponentHandSourceRect(seat, handIndex), pileRect, ()=>settleDiscardPile(card), null, 'down');
+  let flights=1+(drawnEl||forced?1:0);
+  const landed=()=>{
+    flights--;
+    if(flights===0) finishOpponentMotion(userId);
+  };
+  Cards.oppDiscard(source.rect, pileRect, ()=>{
+    settleDiscardPile(card);
+    landed();
+  }, null, 'down');
 
   if(drawnEl){
-    const handTarget=Cards.seatCardsRect(seat);
-    Cards.oppKeepDrawn(Cards.rect(drawnEl), handTarget, ()=>finishOppDrawn(userId));
+    Cards.oppKeepDrawn(drawnRect, handTarget, landed);
   } else if(forced){
     const deckRect=Cards.rect(document.getElementById('deck-pile'));
-    const handTarget=Cards.seatCardsRect(seat);
-    Cards.oppDraw(deckRect, handTarget, ()=>{});
+    Cards.oppDraw(deckRect, handTarget, landed);
   }
 }
 

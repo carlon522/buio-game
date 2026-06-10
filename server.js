@@ -154,13 +154,13 @@ function botAct(roomId, botId) {
         // Fallback: discard drawn card
         const fb = room.discardCard(botId, -1);
         if (fb.error) { console.warn('[bot] discard fallback error:', fb.error); triggerBot(roomId); return; }
-        io.to(roomId).emit('game:state', room.getPublicState());
         if (fb.discardedCard) io.to(roomId).emit('game:card-discarded', { card: fb.discardedCard, discarderId: botId, handIndex: -1 });
+        io.to(roomId).emit('game:state', room.getPublicState());
         advanceTurnInRoom(roomId, fb);
         return;
       }
-      io.to(roomId).emit('game:state', room.getPublicState());
       if (dis.discardedCard) io.to(roomId).emit('game:card-discarded', { card: dis.discardedCard, discarderId: botId, handIndex: idx });
+      io.to(roomId).emit('game:state', room.getPublicState());
       if (dis.specialType === 9) {
         // Nove: peek at a card the bot hasn't seen yet
         setTimeout(() => {
@@ -576,8 +576,8 @@ io.on('connection', socket => {
     if (result.error) return socket.emit('game:error', { message: result.error });
 
     socket.emit('game:private', room.getPrivateState(me.userId));
-    io.to(room.id).emit('game:state', room.getPublicState());
     io.to(room.id).emit('game:card-discarded', { card: result.discardedCard, discarderId: me.userId, handIndex: handIndex ?? -1 });
+    io.to(room.id).emit('game:state', room.getPublicState());
 
     if (result.specialType === 8 || result.specialType === 9) {
       // Special card activated â€” emit prompt only to the current player
@@ -911,8 +911,8 @@ function autoPlayTurn(roomId) {
   const discardRes = room.discardCard(cur.userId, -1);
   if (discardRes.error) return;
 
-  io.to(roomId).emit('game:state', room.getPublicState());
   io.to(roomId).emit('game:card-discarded', { card: discardRes.discardedCard, discarderId: cur.userId, handIndex: -1 });
+  io.to(roomId).emit('game:state', room.getPublicState());
   io.to(roomId).emit('game:attack-window', { card: discardRes.discardedCard, duration: ATTACK_WINDOW_MS });
   clearTimeout(room._attackTimer);
   room._attackTimer = setTimeout(() => endAttackWindow(roomId), ATTACK_WINDOW_MS);
@@ -926,8 +926,8 @@ function autoDiscard(roomId, userId) {
   const result = room.discardCard(userId, -1);
   if (result.error) return;
 
-  io.to(roomId).emit('game:state', room.getPublicState());
   io.to(roomId).emit('game:card-discarded', { card: result.discardedCard, discarderId: userId, handIndex: -1 });
+  io.to(roomId).emit('game:state', room.getPublicState());
   io.to(roomId).emit('game:attack-window', { card: result.discardedCard, duration: ATTACK_WINDOW_MS });
   clearTimeout(room._attackTimer);
   room._attackTimer = setTimeout(() => endAttackWindow(roomId), ATTACK_WINDOW_MS);

@@ -377,6 +377,7 @@ input,select{font-family:inherit}
 }
 .mini-card::after{content:'B';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:900;font-style:italic;color:rgba(196,133,59,.45)}
 .mini-card.opp-drawn-card{margin-left:5px;box-shadow:0 0 0 1px rgba(240,160,48,.5),1px 2px 5px rgba(0,0,0,.5)}
+.mini-card.motion-hidden{visibility:hidden}
 .card-new-pop{animation:card-pop-in .32s cubic-bezier(.34,1.56,.64,1) both}
 @keyframes card-pop-in{from{transform:scale(0) translateY(6px);opacity:0}to{transform:scale(1);opacity:1}}
 /* Reserve the incoming card's space but keep it invisible until the draw ghost lands */
@@ -389,7 +390,11 @@ input,select{font-family:inherit}
 .seat.seat-elim .seat-info{opacity:.3;filter:grayscale(.8)}
 .seat-name{font-size:.68rem;font-weight:700;color:var(--gold-lt);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .seat-lives{display:flex;gap:3px}
-.seat-turn-badge{font-size:.58rem;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.seat-turn-badge{
+  min-height:.75rem;font-size:.58rem;color:var(--gold);font-weight:700;
+  text-transform:uppercase;letter-spacing:.05em;opacity:0;
+}
+.seat-turn-badge.active{opacity:1}
 .seat-elim-badge{font-size:.75rem}
 
 /* ── Card gap hole (after discarding from hand) ──────────────────────────── */
@@ -541,7 +546,7 @@ input,select{font-family:inherit}
 .atk-reveal-overlay{
   position:fixed;inset:0;background:rgba(0,0,0,.82);
   display:flex;align-items:center;justify-content:center;
-  z-index:9800;backdrop-filter:blur(8px);
+  z-index:12000;backdrop-filter:blur(8px);
   animation:arl-in .25s ease-out;transition:opacity .4s;
 }
 @keyframes arl-in{from{opacity:0}to{opacity:1}}
@@ -551,13 +556,15 @@ input,select{font-family:inherit}
   padding:2rem 2.5rem;display:flex;flex-direction:column;
   align-items:center;gap:1.1rem;text-align:center;
   box-shadow:0 30px 80px rgba(0,0,0,.95),0 0 60px rgba(196,133,59,.12);
-  min-width:240px;
+  width:min(92vw,480px);min-width:240px;
+  height:min(480px,calc(100vh - 2rem));min-height:0;
 }
 .ar-who{font-size:1.05rem;font-weight:700;color:var(--gold-lt)}
-.ar-step{display:flex;flex-direction:column;align-items:center;gap:.5rem}
-.ar-step.ar-hidden,.ar-attack-card.ar-hidden,.ar-result.ar-hidden{display:none}
+.ar-step{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5rem;min-height:132px}
+.ar-step.ar-hidden,.ar-attack-card.ar-hidden,.ar-result.ar-hidden{visibility:hidden;opacity:0;pointer-events:none}
+.ar-attack-card,.ar-result{transition:opacity .2s}
 /* ar-result: fully visible when ar-hidden is removed — NO opacity:0 default */
-.ar-result{font-size:1.9rem;font-weight:900;line-height:1.2}
+.ar-result{font-size:1.9rem;font-weight:900;line-height:1.2;min-height:58px;display:flex;align-items:center}
 .ar-vs-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:rgba(255,248,240,.4)}
 .ar-unknown{font-size:2rem;color:rgba(255,248,240,.2)}
 .ar-success{font-size:2rem;font-weight:900;color:var(--success);animation:ar-pop .4s cubic-bezier(.25,.46,.45,.94)}
@@ -661,13 +668,13 @@ input,select{font-family:inherit}
 /* ── Turn bar — slim strip between log and hand ──────────────────────────── */
 .turn-bar{
   display:flex;align-items:center;justify-content:center;
-  padding:.28rem .75rem;flex-shrink:0;
+  padding:.28rem .75rem;flex:0 0 30px;
   font-size:.75rem;font-weight:700;letter-spacing:.04em;
   background:rgba(255,255,255,.06);
   border-top:2px solid rgba(255,255,255,.08);
   border-bottom:2px solid rgba(255,255,255,.08);
   transition:background .25s,border-color .25s,color .25s;
-  min-height:28px;
+  height:30px;min-height:30px;max-height:30px;overflow:hidden;
 }
 .turn-bar.my-turn{
   background:rgba(196,133,59,.22);
@@ -695,6 +702,7 @@ input,select{font-family:inherit}
 
 @media(max-width:600px){
   :root{--cw:54px;--ch:82px}
+  .ar-box{height:min(440px,calc(100vh - 2rem));padding:1.35rem}
   /* Table fills the full width on mobile — no wasted margin */
   .poker-table{aspect-ratio:1.3/1;width:100vw;border-radius:40%/30%;border-width:8px}
   .table-stage{padding:.2rem 0}  /* minimal side padding so table is max size */
