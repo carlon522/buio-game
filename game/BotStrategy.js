@@ -1,9 +1,21 @@
 'use strict';
 
 const PROFILES = {
-  easy: { knownCardUse: 0.35, keepImprovement: 4, knockScore: 16, knockConfidence: 0.45 },
-  medium: { knownCardUse: 0.8, keepImprovement: 1, knockScore: 11, knockConfidence: 0.5 },
-  hard: { knownCardUse: 1, keepImprovement: 0, knockScore: 13, knockConfidence: 0.5 },
+  easy: {
+    knownCardUse: 0.35, keepImprovement: 4, knockScore: 16, knockConfidence: 0.45,
+    attackChance: 0.38, mistakeChance: 0.12,
+    timing: { think: [1900, 3100], reach: [750, 1250], inspect: [1600, 2600], special: [1000, 1700], attack: [1800, 2800] },
+  },
+  medium: {
+    knownCardUse: 0.8, keepImprovement: 1, knockScore: 11, knockConfidence: 0.5,
+    attackChance: 0.72, mistakeChance: 0.045,
+    timing: { think: [950, 1800], reach: [420, 760], inspect: [900, 1500], special: [600, 1050], attack: [950, 1550] },
+  },
+  hard: {
+    knownCardUse: 1, keepImprovement: 0, knockScore: 13, knockConfidence: 0.5,
+    attackChance: 0.96, mistakeChance: 0.008,
+    timing: { think: [420, 820], reach: [240, 440], inspect: [480, 850], special: [360, 650], attack: [420, 760] },
+  },
 };
 
 function normalizeDifficulty(value) {
@@ -94,6 +106,27 @@ function chooseSwap(player, opponents, difficulty = 'medium', random = Math.rand
   return { myCardIndex: own.index, targetUserId: target.userId, targetCardIndex: targetIndex };
 }
 
+function chooseAttack(player, discardCard, difficulty = 'medium', random = Math.random) {
+  if (!player?.hand?.length || !discardCard) return null;
+  const profile = PROFILES[normalizeDifficulty(difficulty)];
+  const remembered = player.hand
+    .map((card, index) => ({ card, index }))
+    .filter(({ index }) => player.seenCards.has(index));
+  const matches = remembered.filter(({ card }) => card.value === discardCard.value);
+  if (matches.length && random() < profile.attackChance) {
+    return { cardIndex: matches[0].index, expectedSuccess: true };
+  }
+  const misses = remembered.filter(({ card }) => card.value !== discardCard.value);
+  if (misses.length && random() < profile.mistakeChance) {
+    return { cardIndex: misses[Math.floor(random() * misses.length)].index, expectedSuccess: false };
+  }
+  return null;
+}
+
+function getTiming(difficulty = 'medium') {
+  return PROFILES[normalizeDifficulty(difficulty)].timing;
+}
+
 module.exports = {
   normalizeDifficulty,
   estimatedScore,
@@ -101,4 +134,6 @@ module.exports = {
   shouldKnock,
   choosePeekIndex,
   chooseSwap,
+  chooseAttack,
+  getTiming,
 };

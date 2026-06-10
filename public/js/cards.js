@@ -2,7 +2,9 @@
 
 const Cards = (() => {
   const D = {
+    deal: 680,
     draw: 900,
+    penalty: 900,
     keep: 950,
     discard: 980,
     forced: 980,
@@ -149,6 +151,38 @@ const Cards = (() => {
     });
   }
 
+  function dealCard(deckRect, targetRect, onLand, isMini = false, round = 0) {
+    fly({
+      from: deckRect,
+      to: targetRect,
+      toW: isMini ? miniW() : undefined,
+      toH: isMini ? miniH() : undefined,
+      face: 'down',
+      className: 'deal-card-ghost',
+      duration: D.deal,
+      arc: -34 - round * 8,
+      spin: round % 2 ? 5 : -5,
+      z: 9980 + round,
+      onDone: removeOnDone(onLand),
+    });
+  }
+
+  function penaltyDraw(deckRect, targetRect, onLand, isMini = false) {
+    fly({
+      from: deckRect,
+      to: targetRect,
+      toW: isMini ? miniW() : undefined,
+      toH: isMini ? miniH() : undefined,
+      face: 'down',
+      className: 'penalty-draw-ghost',
+      duration: D.penalty,
+      arc: -40,
+      spin: 6,
+      z: 9998,
+      onDone: removeOnDone(onLand),
+    });
+  }
+
   function discardDrawnCard(opts) {
     fly({
       from: opts.drawnSlotRect,
@@ -289,7 +323,9 @@ const Cards = (() => {
     rect,
     drawnCardRect,
     seatCardsRect,
+    dealCard,
     drawFromDeck,
+    penaltyDraw,
     discardDrawnCard,
     discardHandCard,
     forcedDiscard,

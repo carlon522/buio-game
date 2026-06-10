@@ -27,6 +27,10 @@ const S = {
   _atkCdInt:null,
   _oppDrawn:null,           // opponent userId -> true while they hold a drawn card
   _oppMotions:null,         // opponent userId -> in-flight source/destination state
+  _dealLanded:null,         // card slot keys that have received their opening deal card
+  _penaltyAnimating:false,
+  _roundEndBusy:false,
+  _peekServerEnded:false,
 };
 
 const socket = io({ autoConnect: false });
@@ -324,7 +328,10 @@ socket.on('game:state',state=>{
     runDealAnimation(()=>{
       clearTimeout(window._dealBusyFallback);
       _dealBusy=false;
-      if(_pendingPeek){ const d=_pendingPeek; _pendingPeek=null; showPeekOverlay(d); }
+      renderBoard();
+      renderTurnBanner();
+      if(_pendingPeek&&!S._peekServerEnded){ const d=_pendingPeek; _pendingPeek=null; showPeekOverlay(d); }
+      else _pendingPeek=null;
     });
     return;
   }
@@ -347,14 +354,25 @@ socket.on('game:turn-start',({userId,username})=>{
 });
 socket.on('game:starting',()=>{
   _dealBusy=true; _pendingPeek=null;
+  _dealAnimationRunning=false;
+  S._dealLanded=new Set();
+  S._peekServerEnded=false;
   if(S._oppMotions) Object.values(S._oppMotions).forEach(m=>clearTimeout(m.timeout));
   // Safety: if game:state/peek never arrives, unlock after 20s
   clearTimeout(window._dealBusyFallback);
-  window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
-  hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
+  window._dealBusyFallback=setTimeout(()=>{
+    if(!_dealBusy) return;
+    _dealBusy=false;
+    renderBoard();
+    renderTurnBanner();
+    if(_pendingPeek&&!S._peekServerEnded){
+      const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);
+    } else _pendingPeek=null;
+  },20000);
+  hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));hide($('panel-count-cards'));
   clearTimeout(S._keptRevealTimer);
   S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._keptRevealServerIdx=null;S._attackAnnouncer=null;
-  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;
+  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;S._penaltyAnimating=false;S._roundEndBusy=false;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
@@ -367,58 +385,51 @@ socket.on('game:starting',()=>{
 // ── Deal animation + peek buffering ──────────────────────────────────────
 let _pendingPeek = null;
 let _dealBusy    = false;
+let _dealAnimationRunning = false;
 
 function runDealAnimation(cb) {
+  if (_dealAnimationRunning) return;
   const gs = S.gameState;
   if (!gs) { cb?.(); return; }
   const deck = $('deck-pile');
   if (!deck) { cb?.(); return; }
-  const dr = deck.getBoundingClientRect();
-  const st = getComputedStyle(document.documentElement);
-  const cw = parseInt(st.getPropertyValue('--cw'))||66;
-  const ch = parseInt(st.getPropertyValue('--ch'))||100;
+  const deckRect = Cards.rect(deck);
+  if (!deckRect) { cb?.(); return; }
+  _dealAnimationRunning = true;
 
   const players = gs.players;
-  const totalCards = players.length * 4;
+  const rounds = Math.max(0, ...players.map(player => player.cardCount || 4));
+  const totalCards = players.reduce((sum, player) => sum + Math.min(rounds, player.cardCount || 4), 0);
   let count = 0;
 
   // Deal in round-robin: card 0 to each player, then card 1, etc.
-  for (let round = 0; round < 4; round++) {
+  for (let round = 0; round < rounds; round++) {
     players.forEach(p => {
-      const delay = count * 130;
+      if (round >= (p.cardCount || 4)) return;
+      const delay = count * 160;
       count++;
       setTimeout(() => {
-        // Target: last seat element for opponents, hand area for self
-        let tx, ty, tw, th;
-        if (p.userId === S.userId) {
-          const hand = $('my-hand');
-          if (!hand) return;
-          const hr = hand.getBoundingClientRect();
-          tx = hr.left + round * (cw + 6); ty = hr.top; tw = cw; th = ch;
-        } else {
-          const seat = document.querySelector(`.seat[data-user-id="${p.userId}"]`);
-          if (!seat) return;
-          const sr = seat.getBoundingClientRect();
-          tx = sr.left + sr.width/2 - 15; ty = sr.top; tw = 30; th = 46;
-        }
-        const f = document.createElement('div');
-        f.className = 'card-3d card-back';
-        f.style.cssText = `position:fixed;left:${dr.left+dr.width/2-cw/2}px;top:${dr.top+dr.height/2-ch/2}px;width:${cw}px;height:${ch}px;z-index:8000;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.6);transition:none`;
-        document.body.appendChild(f);
-        SFX.play('Card', 0.18);
-        requestAnimationFrame(()=>requestAnimationFrame(()=>{
-          f.style.transition='all .38s cubic-bezier(.25,.46,.45,.94)';
-          f.style.left=tx+'px'; f.style.top=ty+'px';
-          f.style.width=tw+'px'; f.style.height=th+'px';
-          f.style.opacity='0';
-        }));
-        setTimeout(()=>f.remove(), 480);
+        const isMe = String(p.userId) === String(S.userId);
+        const target = isMe
+          ? document.querySelector(`#my-hand .card-3d[data-index="${round}"]`)
+          : document.querySelector(`.seat[data-user-id="${p.userId}"] .mini-card[data-card-index="${round}"]`);
+        const targetRect = Cards.rect(target);
+        const key = `${p.userId}:${round}`;
+        Cards.dealCard(deckRect, targetRect, () => {
+          S._dealLanded?.add(key);
+          if (isMe) renderMyHand();
+          else renderSeats();
+          SFX.play('Card', 0.18, { cooldown: 70 });
+        }, !isMe, round);
       }, delay);
     });
   }
 
   // Callback after all cards dealt
-  setTimeout(()=>cb?.(), totalCards * 130 + 200);
+  setTimeout(()=>{
+    _dealAnimationRunning=false;
+    cb?.();
+  }, totalCards * 160 + Cards.durations.deal + 180);
 }
 
 // ── Peek — cards flip face-up IN THE HAND (no popup) ─────────────────────
@@ -429,6 +440,9 @@ function showPeekOverlay({cards,duration}){
   S._peekRevealed = new Set([0, 1]); // first two visual positions flip up
 
   renderMyHand(); // renders cards 0,1 as face-up (they have actual card data in privateState)
+  requestAnimationFrame(() => {
+    $('my-hand')?.querySelectorAll('.card-front').forEach(card => card.classList.add('card-turn-in'));
+  });
 
   // Inline countdown bar in my-area
   show($('peek-inline'));
@@ -452,11 +466,14 @@ function closePeekInline(){
 }
 
 socket.on('game:peek',data=>{
+  if(S._peekServerEnded) return;
   if(_dealBusy){ _pendingPeek=data; return; }
   showPeekOverlay(data);
 });
 
 socket.on('game:peek-ended',()=>{
+  S._peekServerEnded=true;
+  _pendingPeek=null;
   closePeekInline();
   S.handOrder=null;
   renderBoard();renderTurnBanner();
@@ -491,6 +508,10 @@ function renderTurnBanner() {
 
   function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; }
 
+  if(_dealBusy){
+    setBar('other-turn',_lang==='en'?'Dealing cards…':'Distribuzione carte…');
+    return;
+  }
   const myPlayer=gs?.players.find(p=>p.userId===S.userId);
   if(myPlayer?.isEliminated){ setBar('other-turn',t('spectator')); return; }
   if(S._attackMode){ setBar('attack-time',t('choose_card'));return; }
@@ -525,7 +546,8 @@ function renderSeats() {
       const hidden=motion?.reconciled
         ? motion.targetIndex===i && ['keep','forced'].includes(motion.kind)
         : motion?.sourceIndex===i && motion.kind!=='discard-drawn';
-      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden?' motion-hidden':''}" data-card-index="${i}"></div>`;
+      const dealHidden=_dealBusy&&!S._dealLanded?.has(`${player.userId}:${i}`);
+      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden?' motion-hidden':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
     }).join('');
     const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}${motion?.hideDrawn?' motion-hidden':''}"></div>`:'';
     const current=player.isCurrentPlayer&&!player.isEliminated;
@@ -578,7 +600,8 @@ function renderMyHand() {
     if(visualIdx===S._selIdx) cls+=' selected';
     const raise=S.cardRaise?.[visualIdx]||0;
     const raiseAttr=raise>0?` data-raise="${raise}"`:'';
-    const hiddenAttr=(S._animSlot===visualIdx||S._animHidden?.has(visualIdx))?' style="visibility:hidden"':'';
+    const dealHidden=_dealBusy&&!S._dealLanded?.has(`${S.userId}:${serverIdx}`);
+    const hiddenAttr=(S._animSlot===visualIdx||S._animHidden?.has(visualIdx)||dealHidden)?' style="visibility:hidden"':'';
 
     // Show face-up: initial peek OR nove9/special card reveal
     const isPeekUp=S._peekRevealed?.has(visualIdx);
@@ -649,6 +672,7 @@ function renderActions() {
   dis('btn-draw');dis('btn-knock');dis('btn-attack');dis('btn-discard-drawn');
   hint.textContent='';
 
+  if(_dealBusy){ hint.textContent=_lang==='en'?'Dealing cards…':'Distribuzione carte…'; return; }
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
   if(myPlayer?.isEliminated) return;
   if(S._attackRevealActive){ hint.textContent=t('attack_running'); return; }
@@ -717,10 +741,11 @@ function onHandClick(visualIdx) {
         clearTimeout(S._keptRevealTimer);
         S._keptRevealServerIdx=keptServerIdx;
         S._animHidden=null; renderMyHand();renderScore(); SFX.play('Card',0.18);
+        $('my-hand')?.querySelectorAll('.card-3d')[appendVI]?.classList.add('card-turn-in');
         S._keptRevealTimer=setTimeout(()=>{
           S._keptRevealServerIdx=null;
           renderMyHand();
-        },2400);
+        },4000);
       },
     });
     return;
@@ -910,7 +935,6 @@ $('deck-pile').addEventListener('click',()=>{
 });
 $('btn-knock').addEventListener('click',()=>{
   if(!confirm(t('knock_confirm')))return;
-  SFX.play('Knock',0.85);
   socket.emit('game:knock');addLog('Hai bussato!','gold');
 });
 $('btn-discard-drawn').addEventListener('click',discardDrawn);
@@ -918,7 +942,6 @@ $('btn-discard-drawn').addEventListener('click',discardDrawn);
 // ⚔ button: enter attack mode IMMEDIATELY (don't wait for server round-trip)
 // then announce to others so they see the banner
 $('btn-attack').addEventListener('click',()=>{
-  SFX.play('Attacknotify', 0.7);
   S._attackMode=true;
   $('btn-attack').disabled=true;
   renderMyHand();renderActions();renderTurnBanner();
@@ -941,7 +964,11 @@ socket.on('game:drawn-card',({card,penalized})=>{
   const _dcd=$('drawn-card-display');
   if(_dcd) _dcd.style.opacity='0';
   requestAnimationFrame(()=>animDeckDraw(()=>{
-    if(_dcd){ _dcd.style.transition='opacity .15s'; _dcd.style.opacity='1'; }
+    if(_dcd){
+      _dcd.style.transition='opacity .15s';
+      _dcd.style.opacity='1';
+      _dcd.querySelector('.card-3d')?.classList.add('card-turn-in');
+    }
   }));
 });
 
@@ -1133,9 +1160,60 @@ socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCar
     renderMyHand();renderScore();renderSeats();
   },2500);
 
-  // Safety fallback: if game:state never arrives, unpause after 5s
-  setTimeout(()=>{ if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; renderActions();renderTurnBanner(); } },5000);
+  // Safety fallback: leave enough time for a post-popup penalty draw.
+  setTimeout(()=>{ if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; renderActions();renderTurnBanner(); } },8000);
 });
+
+socket.on('game:attack-penalty-draw', animateAttackPenaltyDraw);
+
+function animateAttackPenaltyDraw({userId,targetCardCount}) {
+  const deckRect=Cards.rect($('deck-pile'));
+  if(!deckRect||!targetCardCount) return;
+  S._penaltyAnimating=true;
+  const isMe=String(userId)===String(S.userId);
+
+  if(isMe){
+    const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
+    if(player) player.cardCount=targetCardCount;
+    S.privateState=S.privateState||{hand:[]};
+    S.privateState.hand=S.privateState.hand||[];
+    while(S.privateState.hand.length<targetCardCount){
+      const index=S.privateState.hand.length;
+      S.privateState.hand.push({id:`__attack_penalty_${index}`,known:false,index});
+    }
+    S.handOrder=S.handOrder||Array.from({length:Math.max(0,targetCardCount-1)},(_,i)=>i);
+    const newServerIndex=targetCardCount-1;
+    if(!S.handOrder.includes(newServerIndex)) S.handOrder.push(newServerIndex);
+    const visualIndex=S.handOrder.indexOf(newServerIndex);
+    S._animHidden=new Set([visualIndex]);
+    renderMyHand();
+    const target=Cards.rect($('my-hand')?.querySelectorAll('.card-3d')[visualIndex]);
+    Cards.penaltyDraw(deckRect,target,()=>{
+      S._animHidden=null;
+      S._penaltyAnimating=false;
+      renderMyHand();
+      SFX.play('Card',0.35);
+    });
+    return;
+  }
+
+  const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
+  if(player) player.cardCount=targetCardCount;
+  _prevCounts[userId]=targetCardCount;
+  S._drawingSet=S._drawingSet||new Set();
+  S._drawingSet.add(userId);
+  renderSeats();
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+    const target=Cards.rect(seat?.querySelector('.mini-card.mini-incoming')||seat?.querySelector('.seat-cards'));
+    Cards.penaltyDraw(deckRect,target,()=>{
+      S._drawingSet?.delete(userId);
+      S._penaltyAnimating=false;
+      renderSeats();
+      SFX.play('Card',0.35);
+    },true);
+  }));
+}
 
 // ── Attack reveal: discard card shown first, then attack card ─────────────
 function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard) {
@@ -1181,7 +1259,9 @@ function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard)
   // 2.2s: reveal the attack card
   setTimeout(() => {
     overlay.querySelector('.ar-dots')?.remove();
-    overlay.querySelector('#ar-atk-card')?.classList.remove('ar-hidden');
+    const attackCard=overlay.querySelector('#ar-atk-card');
+    attackCard?.classList.remove('ar-hidden');
+    attackCard?.querySelector('.card-3d')?.classList.add('card-turn-in');
   }, 2200);
 
   // 3.2s: show result
@@ -1352,12 +1432,46 @@ socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCar
 // ── Knock ─────────────────────────────────────────────────────────────────
 socket.on('game:knocked',({username})=>{
   SFX.play('Knock', 0.85); // heard by ALL players
+  SFX.loop('Drumlooppostknock', 0.55);
   addLog(`✊ ${username} ha bussato — ultimo giro!`,'gold');
   toast(`✊ ${username} ha bussato!`,'',5000);show($('last-round-pill'));
 });
 
 // ── Scoring ───────────────────────────────────────────────────────────────
-socket.on('game:scoring',({scores,losers,knockedBy})=>{
+function animateScoreCounts(root) {
+  root?.querySelectorAll('.score-val[data-score]').forEach(el=>{
+    const target=Number(el.dataset.score)||0;
+    const started=performance.now();
+    const duration=1100;
+    const frame=now=>{
+      const raw=Math.min(1,(now-started)/duration);
+      const eased=1-Math.pow(1-raw,3);
+      el.textContent=String(Math.round(target*eased));
+      if(raw<1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+function showRoundEndTransition(done) {
+  S._roundEndBusy=true;
+  SFX.stop('Drumlooppostknock',300);
+  SFX.play('Matchend',0.82,{cooldown:1000});
+  $('count-cards-kicker').textContent=_lang==='en'?'GAME END!':'FINE PARTITA!';
+  $('count-cards-title').textContent=_lang==='en'?'Count the cards.':'Contate le carte.';
+  show($('panel-count-cards'));
+  setTimeout(()=>{
+    hide($('panel-count-cards'));
+    S._roundEndBusy=false;
+    done?.();
+  },2400);
+}
+
+socket.on('game:scoring',payload=>{
+  showRoundEndTransition(()=>renderScoring(payload));
+});
+
+function renderScoring({scores,losers,knockedBy}){
   const gs=S.gameState;show($('panel-scoring'));
   const iLost = losers.some(id=>String(id)===String(S.userId));
   setTimeout(()=>SFX.play(iLost?'Miniloss':'Miniwin', 0.8), 400);
@@ -1368,24 +1482,30 @@ socket.on('game:scoring',({scores,losers,knockedBy})=>{
   $('scoring-list').innerHTML=[...scores].sort((a,b)=>a.score-b.score).map(s=>{
     const isL=losers.includes(s.userId),pl=gs?.players.find(p=>p.userId===s.userId);
     const hh=(s.hand||[]).map(c=>`<div style="width:30px;height:46px;border-radius:4px;overflow:hidden;box-shadow:1px 2px 5px rgba(0,0,0,.4);flex-shrink:0;background:#f5f0e8"><img src="/cards/${c.suit}_${c.value}.jpg" style="width:100%;height:100%;object-fit:contain;display:block" onerror="this.style.display='none'"></div>`).join('');
-    return `<div class="score-row${isL?' loser':''}"><div class="score-meta"><div class="score-name">${esc(s.username)}${isL?' 💔':' ✅'}${knockedBy===s.userId?' ✊':''}</div><div class="score-lives">❤ ${pl?.lives??'?'} vite</div><div class="score-hand-row">${hh}</div></div><div class="score-val">${s.score}</div></div>`;
+    return `<div class="score-row${isL?' loser':''}"><div class="score-meta"><div class="score-name">${esc(s.username)}${isL?' 💔':' ✅'}${knockedBy===s.userId?' ✊':''}</div><div class="score-lives">❤ ${pl?.lives??'?'} vite</div><div class="score-hand-row">${hh}</div></div><div class="score-val" data-score="${s.score}">0</div></div>`;
   }).join('');
+  animateScoreCounts($('scoring-list'));
   const isHost=gs?.hostUserId===S.userId;
   isHost?show($('btn-next-round')):hide($('btn-next-round'));
   $('scoring-hint').textContent=isHost?'':'In attesa che l\'host avvii il prossimo round…';
   addLog(`Fine round! Perdono vita: ${losers.map(id=>gs?.players.find(p=>p.userId===id)?.username||id).join(', ')}`,'danger');
+}
+
+socket.on('game:gameover',payload=>{
+  showRoundEndTransition(()=>renderGameover(payload));
 });
 
-socket.on('game:gameover',({scores,winner})=>{
+function renderGameover({scores,winner}){
   hide($('panel-scoring'));show($('panel-gameover'));
   const iWon = winner && String(winner.userId)===String(S.userId);
   SFX.play(iWon ? 'Youwintheleaderboard' : 'Youlosetheleaderboard', 0.9);
   $('gameover-trophy').textContent = iWon ? '🏆' : '💀';
   $('gameover-text').textContent = iWon ? 'Hai vinto!' : winner ? `Ha vinto ${winner.username}!` : 'Partita terminata!';
   $('gameover-sub').textContent = iWon ? 'Memoria di ferro — avversari distrutti.' : 'Meglio la prossima. Forse.';
-  $('gameover-scores').innerHTML=[...(scores||[])].sort((a,b)=>a.score-b.score).map(s=>`<div class="score-row${s.userId===winner?.userId?' winner':''}"><span class="score-name">${esc(s.username)}</span><span class="score-val">${s.score}</span></div>`).join('');
+  $('gameover-scores').innerHTML=[...(scores||[])].sort((a,b)=>a.score-b.score).map(s=>`<div class="score-row${s.userId===winner?.userId?' winner':''}"><span class="score-name">${esc(s.username)}</span><span class="score-val" data-score="${s.score}">0</span></div>`).join('');
+  animateScoreCounts($('gameover-scores'));
   addLog(`🏆 Vincitore: ${winner?.username||'—'}`,'gold');
-});
+}
 
 $('btn-next-round').addEventListener('click',()=>{socket.emit('game:next-round');hide($('panel-scoring'));});
 $('btn-back-lobby').addEventListener('click',()=>{
@@ -1403,19 +1523,60 @@ socket.on('game:error',({message})=>{
 // ── Sound effects ─────────────────────────────────────────────────────────
 const SFX = {
   _muted: localStorage.getItem('buio_muted') === '1',
+  _last: Object.create(null),
+  _loops: Object.create(null),
   get muted(){ return this._muted; },
 
-  play(name, vol=0.7){
-    if(this._muted) return;
+  play(name, vol=0.7, options={}){
+    if(this._muted) return null;
+    const now=performance.now();
+    const cooldown=options.cooldown??160;
+    if(now-(this._last[name]||0)<cooldown) return null;
+    this._last[name]=now;
     try{
       const a = new Audio(`/SFX/${name}.mp3`);
       a.volume = Math.min(1, Math.max(0, vol));
       a.play().catch(()=>{});
-    } catch(e){}
+      return a;
+    } catch(e){ return null; }
+  },
+
+  loop(name, vol=0.7){
+    this.stop(name,0);
+    if(this._muted) return null;
+    try{
+      const a=new Audio(`/SFX/${name}.mp3`);
+      a.loop=true;
+      a.volume=Math.min(1,Math.max(0,vol));
+      this._loops[name]=a;
+      a.play().catch(()=>{});
+      return a;
+    }catch(e){ return null; }
+  },
+
+  stop(name, fadeMs=250){
+    const a=this._loops[name];
+    if(!a) return;
+    delete this._loops[name];
+    if(!fadeMs){
+      a.pause();
+      a.currentTime=0;
+      return;
+    }
+    const start=a.volume;
+    const started=performance.now();
+    const fade=now=>{
+      const t=Math.min(1,(now-started)/fadeMs);
+      a.volume=Math.max(0,start*(1-t));
+      if(t<1) requestAnimationFrame(fade);
+      else { a.pause();a.currentTime=0; }
+    };
+    requestAnimationFrame(fade);
   },
 
   toggle(){
     this._muted = !this._muted;
+    if(this._muted) Object.keys(this._loops).forEach(name=>this.stop(name,0));
     localStorage.setItem('buio_muted', this._muted ? '1' : '0');
     const btn = $('mute-btn');
     if(btn) btn.textContent = this._muted ? '🔇' : '🔊';
@@ -1702,10 +1863,24 @@ window.buioTest = {
   },
   // Show swap UI test
   testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
+  testPenalty(userId=S.userId){
+    const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
+    animateAttackPenaltyDraw({userId,targetCardCount:(player?.cardCount||4)+1});
+  },
+  testRoundEnd(){
+    showRoundEndTransition(()=>renderScoring({
+      scores:[
+        {userId:S.userId,username:S.username||'Tu',score:17,hand:[]},
+        {userId:'bot_test',username:'Aldo',score:9,hand:[]},
+      ],
+      losers:[S.userId],
+      knockedBy:'bot_test',
+    }));
+  },
   // Test card raise (set specific card to raise level)
   raise(visualIdx,level=1){ if(!S.cardRaise)S.cardRaise=Array(4).fill(0); S.cardRaise[visualIdx]=level%4; renderMyHand(); },
 };
-console.log('%c🃏 buioTest ready: play(), autoPlay(), state(), testReveal(), testSwap()', 'color:#F0A030;font-weight:bold');
+console.log('%c🃏 buioTest ready: play(), autoPlay(), state(), testReveal(), testSwap(), testPenalty(), testRoundEnd()', 'color:#F0A030;font-weight:bold');
 
 // ── Language switcher (IT ↔ EN) ───────────────────────────────────────────
 const LEGACY_TRANSLATIONS = {
