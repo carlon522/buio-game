@@ -44,7 +44,8 @@ const Cards = (() => {
     if (!faceUp(card)) return '';
     const color = card.color === 'red' ? 'red' : 'black';
     return `<img src="/cards/${esc(card.suit)}_${esc(card.value)}.jpg" class="card-img" alt="${esc(card.label)}"
-      onerror="this.style.display='none';makeFB(this.parentElement,'${esc(card.label)}','${esc(card.symbol)}','${color}')">`;
+      onload="cardImageLoaded(this)"
+      onerror="cardImageFailed(this,'${esc(card.label)}','${esc(card.symbol)}','${color}')">`;
   }
 
   function makeGhost(from, opts = {}) {

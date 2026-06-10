@@ -11,15 +11,21 @@ db.exec(`
     password_hash TEXT NOT NULL,
     created_at INTEGER DEFAULT (unixepoch()),
     games_played INTEGER DEFAULT 0,
-    games_won INTEGER DEFAULT 0
+    games_won INTEGER DEFAULT 0,
+    language TEXT NOT NULL DEFAULT 'it'
   )
 `);
 
+const userColumns = db.prepare('PRAGMA table_info(users)').all();
+if (!userColumns.some(column => column.name === 'language')) {
+  db.exec("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'it'");
+}
+
 module.exports = {
-  createUser(id, username, passwordHash) {
-    const stmt = db.prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)');
-    stmt.run(id, username, passwordHash);
-    return { id, username };
+  createUser(id, username, passwordHash, language = 'it') {
+    const stmt = db.prepare('INSERT INTO users (id, username, password_hash, language) VALUES (?, ?, ?, ?)');
+    stmt.run(id, username, passwordHash, language);
+    return { id, username, language };
   },
 
   getUserByUsername(username) {
@@ -27,7 +33,12 @@ module.exports = {
   },
 
   getUserById(id) {
-    return db.prepare('SELECT id, username, games_played, games_won FROM users WHERE id = ?').get(id);
+    return db.prepare('SELECT id, username, games_played, games_won, language FROM users WHERE id = ?').get(id);
+  },
+
+  updateLanguage(userId, language) {
+    db.prepare('UPDATE users SET language = ? WHERE id = ?').run(language, userId);
+    return this.getUserById(userId);
   },
 
   incrementGamesPlayed(userId) {

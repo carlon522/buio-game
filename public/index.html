@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0e0800">
 <title>BUIO – Gioco di Carte</title>
-<link rel="stylesheet" href="/css/style.css?v=53">
+<link rel="stylesheet" href="/css/style.css?v=54">
 </head>
 <body class="screen-auth-active">
 <div id="app-version" class="app-version" aria-label="Versione gioco">v1.0.0</div>
@@ -43,7 +43,7 @@
 <div id="screen-lobby" class="screen hidden">
   <header class="lobby-header">
     <div class="brand-small">🃏 BUIO</div>
-    <div class="user-info"><span id="lobby-username"></span><button id="btn-logout" class="btn-ghost">Esci</button></div>
+    <div class="user-info"><button id="lobby-lang-toggle" class="btn-ghost" type="button">EN</button><span id="lobby-username"></span><button id="btn-logout" class="btn-ghost">Esci</button></div>
   </header>
   <main class="lobby-main">
     <div class="lobby-create-panel">
@@ -57,6 +57,14 @@
         </select>
       </div>
       <button id="btn-create-room" class="btn-primary">Crea Stanza</button>
+      <fieldset class="difficulty-picker">
+        <legend id="difficulty-label">Difficolta bot</legend>
+        <div class="difficulty-options">
+          <input type="radio" name="bot-difficulty" id="bot-easy" value="easy"><label for="bot-easy">Facile</label>
+          <input type="radio" name="bot-difficulty" id="bot-medium" value="medium" checked><label for="bot-medium">Medio</label>
+          <input type="radio" name="bot-difficulty" id="bot-hard" value="hard"><label for="bot-hard">Difficile</label>
+        </div>
+      </fieldset>
       <button id="btn-vs-bot" class="btn-bot">🤖 Gioca vs Bot — Partenza Rapida</button>
       <div class="rules-box">
         <h3>📖 Come si gioca</h3>
@@ -291,7 +299,7 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-<script src="/js/cards.js?v=9"></script>
-<script src="/js/app.js?v=56"></script>
+<script src="/js/cards.js?v=10"></script>
+<script src="/js/app.js?v=57"></script>
 </body>
 </html>
