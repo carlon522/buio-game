@@ -24,6 +24,7 @@ class GameRoom {
     this.roundNumber = 0;
     this.readyPlayers = new Set();
     this.botDifficulty = options.botDifficulty || 'medium';
+    this.turnReadyAt = 0;
     this.addPlayer(hostUserId, hostUsername, null);
   }
 
@@ -85,6 +86,7 @@ class GameRoom {
     this.forcedDiscardNext = false;
     this._pendingForcedDiscardDraw = false; // true when special fires during forced-discard
     this.readyPlayers = new Set();
+    this.turnReadyAt = 0;
 
     for (const p of this.getActivePlayers()) {
       p.hand = [];
@@ -520,6 +522,13 @@ class GameRoom {
       hostUserId: this.hostUserId,
       maxPlayers: this.maxPlayers,
       botDifficulty: this.botDifficulty,
+      turnReadyAt: this.turnReadyAt || 0,
+      presentationActive: Boolean(
+        (this._revealUntil && Date.now() < this._revealUntil) ||
+        (this._presentationUntil && Date.now() < this._presentationUntil) ||
+        this._actionInProgress ||
+        this._specialInProgress
+      ),
       currentPlayerUserId: this.getCurrentPlayer()?.userId || null,
       knockedBy: this.knockedBy,
       lastRound: this.lastRound,

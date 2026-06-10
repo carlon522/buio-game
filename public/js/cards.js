@@ -138,6 +138,13 @@ const Cards = (() => {
     };
   }
 
+  function landOnPile(done) {
+    return g => {
+      done?.();
+      requestAnimationFrame(() => requestAnimationFrame(() => g?.remove()));
+    };
+  }
+
   function drawFromDeck(onDone) {
     fly({
       from: rect(document.getElementById('deck-pile')),
@@ -192,7 +199,7 @@ const Cards = (() => {
       arc: -70,
       spin: -10,
       z: 9999,
-      onDone: removeOnDone(opts.onLand),
+      onDone: landOnPile(opts.onLand),
     });
   }
 
@@ -206,7 +213,7 @@ const Cards = (() => {
       arc: -72,
       spin: -9,
       z: 9999,
-      onDone: removeOnDone(opts.onPileLand),
+      onDone: landOnPile(opts.onPileLand),
     });
 
     fly({
@@ -231,7 +238,7 @@ const Cards = (() => {
       arc: -72,
       spin: -9,
       z: 9999,
-      onDone: removeOnDone(onLand),
+      onDone: landOnPile(onLand),
     });
   }
 
@@ -271,7 +278,7 @@ const Cards = (() => {
       arc: -72,
       spin: -9,
       z: 9999,
-      onDone: removeOnDone(opts.onPileLand),
+      onDone: landOnPile(opts.onPileLand),
     });
 
     fly({
@@ -296,7 +303,7 @@ const Cards = (() => {
       arc: -86,
       spin: -14,
       z: 9999,
-      onDone: removeOnDone(onLand),
+      onDone: landOnPile(onLand),
     });
   }
 
@@ -328,7 +335,7 @@ const Cards = (() => {
       arc: -58,
       spin: -8,
       z: 9995,
-      onDone: removeOnDone(onLand),
+      onDone: landOnPile(onLand),
     });
   }
 

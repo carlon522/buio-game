@@ -35,6 +35,7 @@ const S = {
   _pendingPrivateState:null,
   _pendingAttackRemoval:null,
   _removalGap:null,
+  _turnReadyTimer:null,
 };
 
 const socket = io({ autoConnect: false });
@@ -80,6 +81,9 @@ function renderLog() {
 // ── Card HTML ─────────────────────────────────────────────────────────────
 // Two simple classes: card-back (face-down) or card-front (face-up).
 // No CSS 3D / backface-visibility — reliable across all browsers.
+const _decodedCardImages = new Set();
+const cardImageURL = card => `/cards/${card.suit}_${card.value}.jpg`;
+
 function cardHTML(card, { cls='', index='' }={}) {
   const isUp = card && card.known;
   const attrs = `data-index="${index}" data-id="${card?.id||''}"`;
@@ -90,14 +94,19 @@ function cardHTML(card, { cls='', index='' }={}) {
 
   const sp  = card.isSpecial ? ' is-special' : '';
   const fb  = card.color==='red' ? 'red' : 'black';
-  return `<div class="card-3d card-front${sp} ${cls}" ${attrs}>
-    <img src="/cards/${card.suit}_${card.value}.jpg" class="card-img" alt="${card.label}"
+  const src = cardImageURL(card);
+  const ready = _decodedCardImages.has(src) ? ' image-ready' : '';
+  return `<div class="card-3d card-front${sp}${ready} ${cls}" ${attrs}>
+    <img src="${src}" class="card-img" alt="${card.label}"
       onload="cardImageLoaded(this)"
       onerror="cardImageFailed(this,'${card.label}','${card.symbol}','${fb}')">
   </div>`;
 }
 function cardImageLoaded(img) {
-  const reveal = () => img.parentElement?.classList.add('image-ready');
+  const reveal = () => {
+    _decodedCardImages.add(new URL(img.currentSrc || img.src, location.href).pathname);
+    img.parentElement?.classList.add('image-ready');
+  };
   if (typeof img.decode === 'function') img.decode().then(reveal).catch(reveal);
   else reveal();
 }
@@ -111,7 +120,13 @@ function preloadCardImages() {
     for(let value=1;value<=10;value++){
       const img=new Image();
       img.decoding='async';
-      img.src=`/cards/${suit}_${value}.jpg`;
+      const src=`/cards/${suit}_${value}.jpg`;
+      img.onload=()=>{
+        const mark=()=>_decodedCardImages.add(src);
+        if(typeof img.decode==='function') img.decode().then(mark).catch(mark);
+        else mark();
+      };
+      img.src=src;
     }
   });
 }
@@ -140,15 +155,32 @@ function renderDeck(count) {
   $('deck-count').textContent=count;
 }
 function renderDiscardPile(c) {
-  // Defer while a card is flying toward the pile — prevents "already there" glitch
   if(S._skipDiscard){ if(c) S._pendingDiscardCard=c; return; }
   const el=$('discard-pile'); if(!el)return;
-  el.classList.remove('discard-image-ready');
-  if(!c){el.innerHTML='<div class="discard-empty">—</div>';return;}
+  if(!c){
+    if(!el.querySelector('.discard-empty')) el.innerHTML='<div class="discard-empty">-</div>';
+    return;
+  }
+  const cardId=String(c.id||`${c.suit}-${c.value}`);
+  const current=el.querySelector('.discard-card-top');
+  if(current?.dataset.cardId===cardId) return;
+
+  el.querySelector('.discard-empty')?.remove();
+  el.querySelector('.discard-card-under')?.remove();
+  if(current){
+    current.classList.remove('discard-card-top');
+    current.classList.add('discard-card-under');
+  }
+
   const fb=c.color==='red'?'red':'black';
-  el.innerHTML=`<img src="/cards/${c.suit}_${c.value}.jpg" alt="${c.label}"
-    onload="this.parentElement.classList.add('discard-image-ready')"
-    onerror="this.style.display='none';makeFB(this.parentElement,'${c.label}','${c.symbol}','${fb}')">`;
+  const src=cardImageURL(c);
+  const layer=document.createElement('div');
+  layer.className=`discard-card-layer discard-card-top${_decodedCardImages.has(src)?' image-ready':''}`;
+  layer.dataset.cardId=cardId;
+  layer.innerHTML=`<img src="${src}" alt="${c.label}"
+    onload="cardImageLoaded(this)"
+    onerror="this.style.display='none';this.parentElement.classList.add('image-error');makeFB(this.parentElement,'${c.label}','${c.symbol}','${fb}')">`;
+  el.appendChild(layer);
 }
 
 function settleDiscardPile(card) {
@@ -408,9 +440,19 @@ $('btn-leave-room').addEventListener('click',()=>{
 socket.on('game:state',state=>{
   if (state.status==='playing') checkOppCardChanges(state);
   reconcileOpponentMotions(state);
-  // If state arrives while attack reveal is active, unblock game immediately
-  if(S._attackRevealActive){ S._attackRevealActive=false; resetMotionState(); }
+  // Keep the attack presentation locked until the server marks it complete.
+  if(S._attackRevealActive && !state.presentationActive){
+    S._attackRevealActive=false;
+    resetMotionState();
+  }
   S.gameState=state;
+  clearTimeout(S._turnReadyTimer);
+  if(state.turnReadyAt>Date.now()){
+    S._turnReadyTimer=setTimeout(()=>{
+      renderActions();
+      renderTurnBanner();
+    },state.turnReadyAt-Date.now()+40);
+  }
   // Sync hand order if card count changed (prevents index desync after network gaps)
   const _me=state.players?.find(p=>String(p.userId)===String(S.userId));
   if(_me && !S._handCompacting && (!S.handOrder || S.handOrder.length!==_me.cardCount)){
@@ -457,6 +499,8 @@ socket.on('game:turn-start',({userId,username})=>{
 socket.on('game:starting',()=>{
   _dealBusy=true; _pendingPeek=null;
   _dealAnimationRunning=false;
+  clearTimeout(S._turnReadyTimer);
+  S._turnReadyTimer=null;
   S._dealLanded=new Set();
   S._peekServerEnded=false;
   if(S._oppMotions) Object.values(S._oppMotions).forEach(m=>clearTimeout(m.timeout));
@@ -599,6 +643,10 @@ function renderBoard() {
   renderSeats();renderMyInfo();renderMyHand();renderScore();renderActions();renderLog();
 }
 
+function turnHandoffActive() {
+  return Boolean(S.gameState?.turnReadyAt && Date.now()<S.gameState.turnReadyAt);
+}
+
 // ── Turn banner ───────────────────────────────────────────────────────────
 function renderTurnBanner() {
   const gs=S.gameState;if(!gs)return;
@@ -617,6 +665,10 @@ function renderTurnBanner() {
   const myPlayer=gs?.players.find(p=>p.userId===S.userId);
   if(myPlayer?.isEliminated){ setBar('other-turn',t('spectator')); return; }
   if(S._attackMode){ setBar('attack-time',t('choose_card'));return; }
+  if(turnHandoffActive()){
+    setBar('other-turn',_lang==='en'?'Attack window...':'Finestra attacco...');
+    return;
+  }
   if(phase==='forced-discard'&&isMe){ setBar('attack-time',t('discard_first'));return; }
   if(isMe){
     if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Giochi te — ultimo!':'Giochi te!');
@@ -676,6 +728,54 @@ function renderMyInfo() {
 }
 
 // ── My hand — always face-down, with drag-to-reorder ─────────────────────
+function syncCardFace(el, card, faceUp) {
+  const signature=faceUp&&card?.suit
+    ? `front:${card.id||''}:${card.suit}:${card.value}`
+    : 'back';
+  el.classList.toggle('card-front',faceUp);
+  el.classList.toggle('card-back',!faceUp);
+  el.classList.toggle('is-special',Boolean(faceUp&&card?.isSpecial));
+  if(el.dataset.faceSignature===signature) return;
+  el.dataset.faceSignature=signature;
+  el.innerHTML='';
+  el.classList.remove('image-ready','image-error');
+  if(!faceUp||!card?.suit) return;
+
+  const src=cardImageURL(card);
+  if(_decodedCardImages.has(src)) el.classList.add('image-ready');
+  const img=document.createElement('img');
+  img.src=src;
+  img.className='card-img';
+  img.alt=card.label||String(card.value);
+  img.addEventListener('load',()=>cardImageLoaded(img),{once:true});
+  img.addEventListener('error',()=>cardImageFailed(img,card.label,card.symbol,card.color==='red'?'red':'black'),{once:true});
+  el.appendChild(img);
+}
+
+function bindHandCard(el) {
+  if(el.dataset.handBound) return;
+  el.dataset.handBound='1';
+  el.addEventListener('click',()=>onHandClick(Number(el.dataset.visualIndex)));
+  el.draggable=true;
+  el.addEventListener('dragstart',e=>{
+    _dragIdx=Number(el.dataset.visualIndex);
+    e.dataTransfer.effectAllowed='move';
+    el.style.opacity='.35';
+  });
+  el.addEventListener('dragend',()=>{ el.style.opacity=''; _dragIdx=null; });
+  el.addEventListener('dragover',e=>{ e.preventDefault(); el.style.outline='2px solid var(--gold)'; });
+  el.addEventListener('dragleave',()=>{ el.style.outline=''; });
+  el.addEventListener('drop',e=>{
+    e.preventDefault();
+    el.style.outline='';
+    const visualIdx=Number(el.dataset.visualIndex);
+    if(_dragIdx===null||_dragIdx===visualIdx)return;
+    animateCardSwap(_dragIdx,visualIdx);
+    _dragIdx=null;
+  });
+  el.addEventListener('animationend',()=>el.classList.remove('card-turn-in'));
+}
+
 function renderMyHand() {
   const gs=S.gameState;
   const isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
@@ -695,62 +795,68 @@ function renderMyHand() {
   if(!S.handOrder||S.handOrder.length!==count) {
     S.handOrder=Array.from({length:count},(_,i)=>i);
   }
-  handEl.innerHTML=S.handOrder.map((serverIdx,visualIdx)=>{
-    let cls='';
-    if(inDiscard||inForcedDiscard) cls+=' clickable';
-    if(S._attackMode) cls+=' atk-tgt';
-    if(S._nove9Mode) cls+=' clickable'; // nove9: tap to peek
-    if(visualIdx===S._selIdx) cls+=' selected';
-    if(visualIdx===S._removalGap) cls+=' removal-gap';
-    const raise=S.cardRaise?.[visualIdx]||0;
-    const raiseAttr=raise>0?` data-raise="${raise}"`:'';
-    const dealHidden=_dealBusy&&!S._dealLanded?.has(`${S.userId}:${serverIdx}`);
-    const hiddenAttr=(S._animSlot===visualIdx||(S._animHidden?.has(visualIdx)&&visualIdx!==S._removalGap)||dealHidden)?' style="visibility:hidden"':'';
+  const existing=new Map(
+    [...handEl.querySelectorAll(':scope > .card-3d[data-card-key]')]
+      .map(card=>[card.dataset.cardKey,card])
+  );
+  const fragment=document.createDocumentFragment();
+  S.handOrder.forEach((serverIdx,visualIdx)=>{
+    const privateCard=S.privateState?.hand?.[serverIdx];
+    const key=privateCard?.id||`slot-${serverIdx}`;
+    const el=existing.get(key)||document.createElement('div');
+    existing.delete(key);
+    bindHandCard(el);
 
-    // Show face-up: initial peek OR nove9/special card reveal
-    const isPeekUp=S._peekRevealed?.has(visualIdx);
-    const isTempUp=(S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx)
-      || (S._keptRevealServerIdx!==null&&S._keptRevealServerIdx===serverIdx);
-    if(isPeekUp){
-      const card=S.peekCards?.[visualIdx];
-      if(card) return cardHTML({...card,known:true},{cls,index:visualIdx});
-    }
-    if(isTempUp){
-      const card=S.privateState?.hand?.[serverIdx];
-      if(card&&card.suit) return cardHTML({...card,known:true},{cls,index:visualIdx});
-    }
-
-    return `<div class="card-3d card-back ${cls}"${raiseAttr}${hiddenAttr} data-index="${visualIdx}"></div>`;
-  }).join('');
-
-  handEl.querySelectorAll('.card-3d').forEach((el,vi)=>{
-    const serverIdx=S.handOrder?.[vi]??vi;
-    const key=S.privateState?.hand?.[serverIdx]?.id||`slot-${serverIdx}`;
+    const classes=['card-3d'];
+    if(inDiscard||inForcedDiscard||S._nove9Mode) classes.push('clickable');
+    if(S._attackMode) classes.push('atk-tgt');
+    if(visualIdx===S._selIdx) classes.push('selected');
+    if(visualIdx===S._removalGap) classes.push('removal-gap');
+    if(el.classList.contains('card-turn-in')) classes.push('card-turn-in');
+    if(el.classList.contains('image-ready')) classes.push('image-ready');
+    if(el.classList.contains('image-error')) classes.push('image-error');
+    el.className=classes.join(' ');
     el.dataset.cardKey=key;
     el.dataset.serverIndex=String(serverIdx);
-    el.addEventListener('click',()=>onHandClick(vi));
-    // Drag-to-reorder
-    el.draggable=true;
-    el.addEventListener('dragstart',e=>{
-      _dragIdx=vi; e.dataTransfer.effectAllowed='move'; el.style.opacity='.35';
-    });
-    el.addEventListener('dragend',()=>{ el.style.opacity=''; _dragIdx=null; });
-    el.addEventListener('dragover',e=>{ e.preventDefault(); el.style.outline='2px solid var(--gold)'; });
-    el.addEventListener('dragleave',()=>{ el.style.outline=''; });
-    el.addEventListener('drop',e=>{
-      e.preventDefault(); el.style.outline='';
-      if(_dragIdx===null||_dragIdx===vi)return;
-      animateCardSwap(_dragIdx, vi);
-      _dragIdx=null;
-    });
+    el.dataset.visualIndex=String(visualIdx);
+    el.dataset.index=String(visualIdx);
+
+    const raise=S.cardRaise?.[visualIdx]||0;
+    if(raise>0) el.dataset.raise=String(raise);
+    else delete el.dataset.raise;
+    const dealHidden=_dealBusy&&!S._dealLanded?.has(`${S.userId}:${serverIdx}`);
+    const hidden=S._animSlot===visualIdx||
+      (S._animHidden?.has(visualIdx)&&visualIdx!==S._removalGap)||
+      dealHidden;
+    el.style.visibility=hidden?'hidden':'';
+
+    const isPeekUp=S._peekRevealed?.has(visualIdx);
+    const isTempUp=(S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx)||
+      (S._keptRevealServerIdx!==null&&S._keptRevealServerIdx===serverIdx);
+    const faceCard=isPeekUp?S.peekCards?.[visualIdx]:isTempUp?privateCard:null;
+    syncCardFace(el,faceCard,Boolean(faceCard?.suit));
+    fragment.appendChild(el);
   });
+  handEl.replaceChildren(fragment);
 
   // Drawn card
   const slot=$('drawn-slot');
   if(S.drawnCard&&isMe){
     show(slot);
-    $('drawn-card-display').innerHTML=cardHTML(S.drawnCard,{cls:'clickable',index:-1}); // no anim-appear: replays on every renderMyHand call
-    $('drawn-card-display').querySelector('.card-3d')?.addEventListener('click',()=>{ if(phase==='discard'&&isMe&&!S._attackMode) discardDrawn(); });
+    const display=$('drawn-card-display');
+    let drawn=display.querySelector(':scope > .card-3d');
+    const key=S.drawnCard.id||'__drawn__';
+    if(!drawn||drawn.dataset.cardKey!==key){
+      drawn=document.createElement('div');
+      drawn.className='card-3d clickable';
+      drawn.dataset.cardKey=key;
+      drawn.dataset.index='-1';
+      drawn.addEventListener('click',()=>{
+        if(S.gameState?.phase==='discard'&&S.gameState.currentPlayerUserId===S.userId&&!S._attackMode) discardDrawn();
+      });
+      display.replaceChildren(drawn);
+    }
+    syncCardFace(drawn,S.drawnCard,Boolean(S.drawnCard.known&&S.drawnCard.suit));
   } else hide(slot);
 
   // Update overflow arrow after hand renders
@@ -774,6 +880,7 @@ function renderScore() {
 function renderActions() {
   const gs=S.gameState,isMe=gs?.currentPlayerUserId===S.userId,phase=gs?.phase;
   const hint=$('action-hint');
+  const dp=$('discard-pile');
   // Always grey out all buttons — enable only what's valid right now
   const en=id=>{ const e=$(id);if(e)e.disabled=false; };
   const dis=id=>{ const e=$(id);if(e)e.disabled=true; };
@@ -785,13 +892,18 @@ function renderActions() {
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
   if(myPlayer?.isEliminated) return;
   if(S._attackRevealActive){ hint.textContent=t('attack_running'); return; }
+  if(turnHandoffActive()){
+    hint.textContent=_lang==='en'?'Attack window...':'Finestra attacco...';
+    if(gs?.discardTop&&!S._attackMode&&!S._attackAnnouncer) en('btn-attack');
+    if(dp) dp.classList.toggle('atk-target',Boolean(S._attackMode||S._attackAnnouncer));
+    return;
+  }
 
   if(phase==='draw'&&isMe){ en('btn-draw');en('btn-knock'); }
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode) en('btn-discard-drawn');
   if(phase==='special'&&isMe) hint.textContent=t('choose_special');
   if(['draw','discard','forced-discard'].includes(phase)&&gs?.discardTop&&!S._attackMode&&!S._attackAnnouncer) en('btn-attack');
   // Highlight the discard pile card as the attack target when in attack mode
-  const dp=$('discard-pile');
   if(dp) dp.classList.toggle('atk-target', !!(S._attackMode||S._attackAnnouncer));
 }
 
@@ -977,6 +1089,7 @@ function animateCardSwap(fromVI, toVI) {
 }
 
 function discardDrawn() {
+  if(turnHandoffActive()) return;
   SFX.play('Card', 0.5);
   // Capture rects BEFORE hiding the slot (hidden elements have zero rect)
   const drawnSlotRect = Cards.drawnCardRect(); // rect of the card-3d inside drawn-slot
@@ -1034,15 +1147,21 @@ function animDeckDraw(onArrive) {
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
-$('btn-draw').addEventListener('click',()=>{socket.emit('game:draw');$('btn-draw').disabled=true;$('btn-knock').disabled=true;});
+$('btn-draw').addEventListener('click',()=>{
+  if(turnHandoffActive()) return;
+  socket.emit('game:draw');
+  $('btn-draw').disabled=true;
+  $('btn-knock').disabled=true;
+});
 $('deck-pile').addEventListener('click',()=>{
-  if(S.gameState?.phase==='draw'&&S.gameState.currentPlayerUserId===S.userId){
+  if(!turnHandoffActive()&&S.gameState?.phase==='draw'&&S.gameState.currentPlayerUserId===S.userId){
     socket.emit('game:draw');
     $('btn-draw').disabled=true;
     $('btn-knock').disabled=true;
   }
 });
 $('btn-knock').addEventListener('click',()=>{
+  if(turnHandoffActive()) return;
   if(!confirm(t('knock_confirm')))return;
   socket.emit('game:knock');addLog('Hai bussato!','gold');
 });
@@ -1540,7 +1659,7 @@ socket.on('game:attack-announced',({attackerUserId, attackerUsername, discardCar
   const cardEl = $('ann-discard-card');
   if(cardEl && discardCard) {
     const fb = discardCard.color==='red'?'red':'black';
-    cardEl.innerHTML=`<div class="card-3d card-front" style="width:40px;height:61px;pointer-events:none"><img src="/cards/${discardCard.suit}_${discardCard.value}.jpg" class="card-img" onerror="this.style.display='none';makeFB(this.parentElement,'${discardCard.label}','${discardCard.symbol}','${fb}')"></div>`;
+    cardEl.innerHTML=`<div class="card-3d card-front" style="width:40px;height:61px;pointer-events:none"><img src="/cards/${discardCard.suit}_${discardCard.value}.jpg" class="card-img" onload="cardImageLoaded(this)" onerror="this.style.display='none';makeFB(this.parentElement,'${discardCard.label}','${discardCard.symbol}','${fb}')"></div>`;
   }
 
   $('ann-title').textContent = isAttacker ? '⚔ Scegli carta!' : `⚔ ${esc(attackerUsername)} attacca!`;
