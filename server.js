@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('./db/database');
 const GameRoom = require('./game/GameRoom');
+const BotStrategy = require('./game/BotStrategy');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'buio-dev-secret-change-in-prod';
 const PORT = process.env.PORT || 3000;
@@ -112,8 +113,19 @@ function botAct(roomId, botId) {
   }
 
   const phase = room.phase;
+  const difficulty = BotStrategy.normalizeDifficulty(room.botDifficulty);
 
   if (phase === 'draw') {
+    const player = room.players.find(p => p.userId === botId);
+    if (BotStrategy.shouldKnock(player, room, difficulty)) {
+      const knockRes = room.knock(botId);
+      if (!knockRes.error) {
+        io.to(roomId).emit('game:knocked', { username: player.username });
+        io.to(roomId).emit('game:state', room.getPublicState());
+        advanceTurnInRoom(roomId, knockRes);
+        return;
+      }
+    }
     // Human-like pause before reaching for the deck (think time already passed in triggerBot)
     setTimeout(() => {
       if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'draw' || revealActive(room)) {
@@ -130,25 +142,8 @@ function botAct(roomId, botId) {
       if (room.getCurrentPlayer()?.userId !== botId || room.phase !== 'discard') {
         triggerBot(roomId); return;
       }
-      // Bot knocks: 40% in late game, or 25% anytime if estimated score is very low
-      const _bp=room.players.find(p=>p.userId===botId);
-      const _est=_bp?_bp.hand.reduce((s,c)=>s+c.value,0):99;
-      if ((room.deck.length < 20 && Math.random() < 0.40) || (_est <= 9 && Math.random() < 0.25)) {
-        const knockRes = room.knock(botId);
-        if (!knockRes.error) {
-          io.to(roomId).emit('game:knocked', { username: room.players.find(p=>p.userId===botId)?.username });
-          if (knockRes.type === 'scoring' || knockRes.type === 'gameover') {
-            advanceTurnInRoom(roomId, knockRes);
-          } else {
-            io.to(roomId).emit('game:state', room.getPublicState());
-            advanceTurnInRoom(roomId, knockRes);
-          }
-          return;
-        }
-      }
       const player = room.players.find(p => p.userId === botId);
-      const hLen = player?.hand.length || 0;
-      const idx = hLen > 0 && Math.random() < 0.55 ? Math.floor(Math.random() * hLen) : -1;
+      const idx = BotStrategy.chooseDiscard(player, room.drawnCard, difficulty);
       const dis = room.discardCard(botId, idx);
       if (dis.error) {
         // Fallback: discard drawn card
@@ -165,8 +160,7 @@ function botAct(roomId, botId) {
         // Nove: peek at a card the bot hasn't seen yet
         setTimeout(() => {
           const bp = room.players.find(p => p.userId === botId);
-          let pi = bp?.hand.findIndex((_, i) => !bp.seenCards.has(i));
-          if (pi < 0) pi = 0;
+          const pi = BotStrategy.choosePeekIndex(bp, difficulty);
           room.useSpecial9(botId, pi);
           io.to(roomId).emit('game:state', room.getPublicState());
           const adv = room.completeSpecialAndAdvance();
@@ -178,19 +172,18 @@ function botAct(roomId, botId) {
         setTimeout(() => {
           const bp = room.players.find(p => p.userId === botId);
           const opponents = room.getActivePlayers().filter(p => p.userId !== botId);
-          if (bp && bp.hand.length > 0 && opponents.length > 0) {
-            // Find highest-value card in bot's hand
-            let maxVal = -1, myCardIdx = 0;
-            bp.hand.forEach((c, i) => { if (c.value > maxVal) { maxVal=c.value; myCardIdx=i; } });
-            const opp = opponents[Math.floor(Math.random() * opponents.length)];
-            const oppCardIdx = Math.floor(Math.random() * opp.hand.length);
-            const res = room.useSpecial8Full(botId, myCardIdx, opp.userId, oppCardIdx);
+          const choice = BotStrategy.chooseSwap(bp, opponents, difficulty);
+          if (choice) {
+            const opp = opponents.find(p => p.userId === choice.targetUserId);
+            const res = room.useSpecial8Full(botId, choice.myCardIndex, choice.targetUserId, choice.targetCardIndex);
             if (!res.error) {
               io.to(roomId).emit('game:swap-reveal', {
                 initiatorUserId: botId,
                 initiatorUsername: bp.username,
                 targetUserId: opp.userId,
                 targetUsername: opp.username,
+                initiatorCardIndex: res.initiatorCardIndex,
+                targetCardIndex: res.targetCardIndex,
               });
               sendPrivateToAll(room);
               io.to(roomId).emit('game:state', room.getPublicState());
@@ -221,8 +214,7 @@ function botAct(roomId, botId) {
     if (res.specialType === 9) {
       setTimeout(() => {
         const bp = room.players.find(p => p.userId === botId);
-        let pi = bp?.hand.findIndex((_, i) => !bp.seenCards.has(i));
-        if (pi < 0) pi = 0;
+        const pi = BotStrategy.choosePeekIndex(bp, difficulty);
         room.useSpecial9(botId, pi);
         io.to(roomId).emit('game:state', room.getPublicState());
         const adv = room.completeSpecialAndAdvance();
@@ -234,15 +226,16 @@ function botAct(roomId, botId) {
       setTimeout(() => {
         const bp = room.players.find(p => p.userId === botId);
         const opponents = room.getActivePlayers().filter(p => p.userId !== botId);
-        if (bp && bp.hand.length > 0 && opponents.length > 0) {
-          let maxVal = -1, myCardIdx = 0;
-          bp.hand.forEach((c, i) => { if (c.value > maxVal) { maxVal = c.value; myCardIdx = i; } });
-          const opp = opponents[Math.floor(Math.random() * opponents.length)];
-          const swapRes = room.useSpecial8Full(botId, myCardIdx, opp.userId, Math.floor(Math.random() * opp.hand.length));
+        const choice = BotStrategy.chooseSwap(bp, opponents, difficulty);
+        if (choice) {
+          const opp = opponents.find(p => p.userId === choice.targetUserId);
+          const swapRes = room.useSpecial8Full(botId, choice.myCardIndex, choice.targetUserId, choice.targetCardIndex);
           if (!swapRes.error) {
             io.to(roomId).emit('game:swap-reveal', {
               initiatorUserId: botId, initiatorUsername: bp.username,
               targetUserId: opp.userId, targetUsername: opp.username,
+              initiatorCardIndex: swapRes.initiatorCardIndex,
+              targetCardIndex: swapRes.targetCardIndex,
             });
             sendPrivateToAll(room);
             io.to(roomId).emit('game:state', room.getPublicState());
@@ -324,15 +317,16 @@ app.get('/api/debug/room/:roomId', (req, res) => {
 
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body || {};
+  const language = req.body?.language === 'en' ? 'en' : 'it';
   if (!username?.trim() || !password) return res.status(400).json({ error: 'Username and password required' });
   if (username.trim().length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
   try {
     const hash = await bcrypt.hash(password, 10);
-    const user = db.createUser(uuidv4(), username.trim(), hash);
+    const user = db.createUser(uuidv4(), username.trim(), hash, language);
     const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, username: user.username, userId: user.id });
+    res.json({ token, username: user.username, userId: user.id, language: user.language });
   } catch (err) {
     if (err.message.includes('UNIQUE')) return res.status(409).json({ error: 'Username already taken' });
     console.error(err);
@@ -348,10 +342,22 @@ app.post('/api/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, username: user.username, userId: user.id });
+    res.json({ token, username: user.username, userId: user.id, language: user.language || 'it' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/preferences/language', (req, res) => {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const language = req.body?.language === 'en' ? 'en' : 'it';
+    db.updateLanguage(String(payload.userId), language);
+    res.json({ language });
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 });
 
@@ -369,7 +375,8 @@ io.on('connection', socket => {
   socket.on('authenticate', token => {
     try {
       const payload = jwt.verify(token, JWT_SECRET);
-      me = { userId: String(payload.userId), username: payload.username };
+      const account = db.getUserById(String(payload.userId));
+      me = { userId: String(payload.userId), username: payload.username, language: account?.language || 'it' };
       socketUser.set(socket.id, me);
       socket.emit('authenticated', me);
       socket.emit('lobby:list', getLobbyList());
@@ -418,13 +425,15 @@ io.on('connection', socket => {
   socket.on('lobby:leave', () => leaveRoom());
 
   // â”€â”€ Quick play vs bot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  socket.on('lobby:vs-bot', ({ name } = {}) => {
+  socket.on('lobby:vs-bot', ({ name, difficulty } = {}) => {
     if (!me) return;
     if (socketRoom.has(socket.id)) leaveRoom();
 
     const roomId = uuidv4();
     const room = new GameRoom(roomId, me.userId, me.username,
-      name?.trim() || `${me.username} vs Bot`, 2);
+      name?.trim() || `${me.username} vs Bot`, 2, {
+        botDifficulty: BotStrategy.normalizeDifficulty(difficulty),
+      });
     room.players[0].socketId = socket.id;
     room.players[0].connected = true;
     rooms.set(roomId, room);
@@ -539,6 +548,8 @@ io.on('connection', socket => {
       targetUsername: result.targetUsername,
       initiatorCard: result.initiatorCard,   // card the initiator gave away
       targetCard: result.targetCard,          // card the target gave away
+      initiatorCardIndex: result.initiatorCardIndex,
+      targetCardIndex: result.targetCardIndex,
     });
 
     sendPrivateToAll(room);
@@ -721,6 +732,18 @@ io.on('connection', socket => {
       success: result.success,
       penaltyCard: result.penaltyCard || null
     });
+
+    const bots = room.getActivePlayers().filter(player => isBot(player.userId));
+    if (bots.length && Math.random() < 0.55) {
+      const bot = bots[Math.floor(Math.random() * bots.length)];
+      const keys = result.success
+        ? ['bot_attack_hit_1', 'bot_attack_hit_2', 'bot_attack_hit_3']
+        : ['bot_attack_miss_1', 'bot_attack_miss_2'];
+      setTimeout(() => io.to(room.id).emit('game:bot-reaction', {
+        username: bot.username,
+        key: keys[Math.floor(Math.random() * keys.length)],
+      }), randMs(900, 1800));
+    }
 
     // Send state at 3.5s — right when the result label appears on the reveal overlay.
     // The game:state arrival clears _attackRevealActive on the client, unblocking the game.

@@ -21,6 +21,8 @@ const S = {
   _peekDuration:0,          // ms of peek timer
   _nove9Mode:false,         // true when card 9 is active and user must tap a hand card
   _tempRevealServerIdx:null,// server card index temporarily shown face-up (card 9)
+  _keptRevealServerIdx:null,// kept drawn card stays face-up briefly after landing
+  _keptRevealTimer:null,
   gameLog:[], _selIdx:-1,
   _atkCdInt:null,
   _oppDrawn:null,           // opponent userId -> true while they hold a drawn card
@@ -82,13 +84,35 @@ function cardHTML(card, { cls='', index='' }={}) {
   const fb  = card.color==='red' ? 'red' : 'black';
   return `<div class="card-3d card-front${sp} ${cls}" ${attrs}>
     <img src="/cards/${card.suit}_${card.value}.jpg" class="card-img" alt="${card.label}"
-      onerror="this.style.display='none';makeFB(this.parentElement,'${card.label}','${card.symbol}','${fb}')">
+      onload="cardImageLoaded(this)"
+      onerror="cardImageFailed(this,'${card.label}','${card.symbol}','${fb}')">
   </div>`;
 }
+function cardImageLoaded(img) {
+  const reveal = () => img.parentElement?.classList.add('image-ready');
+  if (typeof img.decode === 'function') img.decode().then(reveal).catch(reveal);
+  else reveal();
+}
+function cardImageFailed(img,label,sym,color) {
+  img.style.display='none';
+  img.parentElement?.classList.add('image-error');
+  makeFB(img.parentElement,label,sym,color);
+}
+function preloadCardImages() {
+  ['denari','coppe','spade','bastoni'].forEach(suit => {
+    for(let value=1;value<=10;value++){
+      const img=new Image();
+      img.decoding='async';
+      img.src=`/cards/${suit}_${value}.jpg`;
+    }
+  });
+}
+window.cardImageLoaded=cardImageLoaded;
+window.cardImageFailed=cardImageFailed;
 function makeFB(el,label,sym,color) {
   if(el.querySelector('.card-fb'))return;
   const d=document.createElement('div'); d.className=`card-fb ${color}`;
-  d.innerHTML=`<span>${label}</span><span>${sym}</span>`; el.style.background='#fff'; el.appendChild(d);
+  d.innerHTML=`<span>${label}</span><span>${sym}</span>`; el.appendChild(d);
 }
 function livesHTML(n, max=3) {
   return Array(max).fill(0).map((_,i)=>`<div class="life-pip${i>=n?' lost':''}"></div>`).join('');
@@ -111,9 +135,11 @@ function renderDiscardPile(c) {
   // Defer while a card is flying toward the pile — prevents "already there" glitch
   if(S._skipDiscard){ if(c) S._pendingDiscardCard=c; return; }
   const el=$('discard-pile'); if(!el)return;
+  el.classList.remove('discard-image-ready');
   if(!c){el.innerHTML='<div class="discard-empty">—</div>';return;}
   const fb=c.color==='red'?'red':'black';
   el.innerHTML=`<img src="/cards/${c.suit}_${c.value}.jpg" alt="${c.label}"
+    onload="this.parentElement.classList.add('discard-image-ready')"
     onerror="this.style.display='none';makeFB(this.parentElement,'${c.label}','${c.symbol}','${fb}')">`;
 }
 
@@ -196,11 +222,12 @@ $('form-login').addEventListener('submit',async e=>{
   e.preventDefault();$('login-error').textContent='';
   const d=await apiPost('/api/login',{username:$('login-username').value.trim(),password:$('login-password').value});
   if(d.error){$('login-error').textContent=d.error;return;}
+  if(d.language){_lang=d.language;localStorage.setItem('buio_lang',_lang);applyLang();}
   saveSession(d.token,d.username,d.userId);connectSocket();
 });
 $('form-register').addEventListener('submit',async e=>{
   e.preventDefault();$('reg-error').textContent='';
-  const d=await apiPost('/api/register',{username:$('reg-username').value.trim(),password:$('reg-password').value});
+  const d=await apiPost('/api/register',{username:$('reg-username').value.trim(),password:$('reg-password').value,language:_lang});
   if(d.error){$('reg-error').textContent=d.error;return;}
   saveSession(d.token,d.username,d.userId);connectSocket();
 });
@@ -209,14 +236,22 @@ $('btn-logout').addEventListener('click',()=>{clearSession();socket.disconnect()
 // ── Socket ────────────────────────────────────────────────────────────────
 function connectSocket(){socket.connect();}
 socket.on('connect',()=>{if(S.token)socket.emit('authenticate',S.token);});
-socket.on('authenticated',({username})=>{S.username=username;$('lobby-username').textContent=username;showScreen('lobby');});
+socket.on('authenticated',({username,language})=>{
+  S.username=username;
+  if(language){_lang=language;localStorage.setItem('buio_lang',_lang);applyLang();}
+  $('lobby-username').textContent=username;
+  showScreen('lobby');
+});
 socket.on('auth:error',({message})=>{clearSession();showScreen('auth');toast(message,'error');});
 socket.on('disconnect',()=>{if(S.currentRoomId)toast('Connessione persa…','error');});
 
 // ── Lobby ─────────────────────────────────────────────────────────────────
 $('btn-refresh').addEventListener('click',()=>socket.emit('lobby:get-list'));
 $('btn-create-room').addEventListener('click',()=>{socket.emit('lobby:create',{name:$('room-name').value.trim()||undefined,maxPlayers:parseInt($('room-max-players').value)});});
-$('btn-vs-bot').addEventListener('click',()=>socket.emit('lobby:vs-bot',{name:$('room-name').value.trim()||undefined}));
+$('btn-vs-bot').addEventListener('click',()=>socket.emit('lobby:vs-bot',{
+  name:$('room-name').value.trim()||undefined,
+  difficulty:document.querySelector('input[name="bot-difficulty"]:checked')?.value||'medium',
+}));
 socket.on('lobby:list',rooms=>{
   const list=$('room-list');
   if(!rooms.length){list.innerHTML='<div class="empty-state">Nessuna partita.<br>Creane una!</div>';return;}
@@ -317,7 +352,8 @@ socket.on('game:starting',()=>{
   clearTimeout(window._dealBusyFallback);
   window._dealBusyFallback=setTimeout(()=>{ if(_dealBusy){_dealBusy=false; if(_pendingPeek){const d=_pendingPeek;_pendingPeek=null;showPeekOverlay(d);}} },20000);
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));
-  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._attackAnnouncer=null;
+  clearTimeout(S._keptRevealTimer);
+  S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._keptRevealServerIdx=null;S._attackAnnouncer=null;
   S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
@@ -396,7 +432,7 @@ function showPeekOverlay({cards,duration}){
 
   // Inline countdown bar in my-area
   show($('peek-inline'));
-  $('btn-ready').disabled=false;$('btn-ready').textContent='✓ Ho memorizzato';
+  $('btn-ready').disabled=false;$('btn-ready').textContent=_lang==='en'?'I memorised them':'Ho memorizzato';
   const prog=$('peek-prog-inline');
   if(prog){ prog.style.transition='none';prog.style.width='100%';
     requestAnimationFrame(()=>requestAnimationFrame(()=>{prog.style.transition=`width ${duration}ms linear`;prog.style.width='0%';})); }
@@ -430,7 +466,7 @@ socket.on('game:peek-ended',()=>{
 
 $('btn-ready').addEventListener('click',()=>{
   closePeekInline();
-  socket.emit('game:ready');$('btn-ready').disabled=true;$('btn-ready').textContent='In attesa degli altri…';
+  socket.emit('game:ready');$('btn-ready').disabled=true;$('btn-ready').textContent=_lang==='en'?'Waiting for the others...':'In attesa degli altri...';
 });
 
 
@@ -456,15 +492,15 @@ function renderTurnBanner() {
   function setBar(cls,label){ bar.className='turn-bar '+cls; txt.textContent=label; }
 
   const myPlayer=gs?.players.find(p=>p.userId===S.userId);
-  if(myPlayer?.isEliminated){ setBar('other-turn','Spettatore'); return; }
-  if(S._attackMode){ setBar('attack-time','⚔ Scegli carta!');return; }
-  if(phase==='forced-discard'&&isMe){ setBar('attack-time','🔟 Scarta prima!');return; }
+  if(myPlayer?.isEliminated){ setBar('other-turn',t('spectator')); return; }
+  if(S._attackMode){ setBar('attack-time',t('choose_card'));return; }
+  if(phase==='forced-discard'&&isMe){ setBar('attack-time',t('discard_first'));return; }
   if(isMe){
     if(phase==='draw') setBar('my-turn', gs.lastRound?'⚡ Giochi te — ultimo!':'Giochi te!');
     else if(phase==='discard'){const d=S.drawnCard;setBar('my-turn',d?.known?`Tieni o scarta ${d.label}${d.symbol} (${d.value}pt)`:'Tieni o scarta?');}
-    else setBar('my-turn','Giochi te!');
+    else setBar('my-turn',t('your_turn'));
   } else {
-    setBar('other-turn',cur?`Turno di ${cur.username}`:'In attesa del prossimo turno');
+    setBar('other-turn',cur?`${_lang==='en'?'Turn:':'Turno di'} ${cur.username}`:t('waiting_turn'));
   }
 }
 
@@ -546,7 +582,8 @@ function renderMyHand() {
 
     // Show face-up: initial peek OR nove9/special card reveal
     const isPeekUp=S._peekRevealed?.has(visualIdx);
-    const isTempUp=S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx;
+    const isTempUp=(S._tempRevealServerIdx!==null&&S._tempRevealServerIdx===serverIdx)
+      || (S._keptRevealServerIdx!==null&&S._keptRevealServerIdx===serverIdx);
     if(isPeekUp){
       const card=S.peekCards?.[visualIdx];
       if(card) return cardHTML({...card,known:true},{cls,index:visualIdx});
@@ -614,11 +651,11 @@ function renderActions() {
 
   const myPlayer=gs?.players.find(p=>String(p.userId)===String(S.userId));
   if(myPlayer?.isEliminated) return;
-  if(S._attackRevealActive){ hint.textContent='Attacco in corso…'; return; }
+  if(S._attackRevealActive){ hint.textContent=t('attack_running'); return; }
 
   if(phase==='draw'&&isMe){ en('btn-draw');en('btn-knock'); }
   if(phase==='discard'&&isMe&&S.drawnCard&&!S._attackMode) en('btn-discard-drawn');
-  if(phase==='special'&&isMe) hint.textContent='Scegli l\'azione per la carta speciale';
+  if(phase==='special'&&isMe) hint.textContent=t('choose_special');
   if(['draw','discard','forced-discard'].includes(phase)&&gs?.discardTop&&!S._attackMode&&!S._attackAnnouncer) en('btn-attack');
   // Highlight the discard pile card as the attack target when in attack mode
   const dp=$('discard-pile');
@@ -655,6 +692,7 @@ function onHandClick(visualIdx) {
     // The selected hand card leaves; the drawn card joins at the right edge.
     // Known/unknown state follows the actual card state through the animation.
     const appendVI=appendDrawnOrderAfterDiscard(visualIdx, serverIdx, drawnCard);
+    const keptServerIdx=S.handOrder?.[appendVI] ?? appendVI;
     S._skipDiscard = true;
     S._animSlot    = null;
     S._animHidden  = new Set([appendVI]);
@@ -676,7 +714,13 @@ function onHandClick(visualIdx) {
         settleDiscardPile();
       },
       onHandLand: ()=>{
+        clearTimeout(S._keptRevealTimer);
+        S._keptRevealServerIdx=keptServerIdx;
         S._animHidden=null; renderMyHand();renderScore(); SFX.play('Card',0.18);
+        S._keptRevealTimer=setTimeout(()=>{
+          S._keptRevealServerIdx=null;
+          renderMyHand();
+        },2400);
       },
     });
     return;
@@ -865,7 +909,7 @@ $('deck-pile').addEventListener('click',()=>{
   }
 });
 $('btn-knock').addEventListener('click',()=>{
-  if(!confirm('Vuoi davvero bussare? Tutti gli altri faranno un ultimo turno.'))return;
+  if(!confirm(t('knock_confirm')))return;
   SFX.play('Knock',0.85);
   socket.emit('game:knock');addLog('Hai bussato!','gold');
 });
@@ -921,17 +965,17 @@ function showSpecial(type,card){
   $('special-card-preview').innerHTML=cardHTML({...card,known:true},{cls:'anim-appear'});
 
   if(type==='8'){
-    $('special-title').textContent='🔄 Scambia';
-    $('special-desc').textContent='Scegli la tua carta, poi quella di un avversario';
+    $('special-title').textContent=t('swap');
+    $('special-desc').textContent=t('choose_swap');
     const myCount=S.gameState?.players.find(p=>p.userId===S.userId)?.cardCount??4;
     const opp=(S.gameState?.players||[]).filter(p=>p.userId!==S.userId&&!p.isEliminated);
     let selMyVI=null;
 
     $('special-actions').innerHTML=`
-      <p class="s8-label">La tua carta</p>
+      <p class="s8-label">${t('your_card')}</p>
       <div class="special-hand-row" id="s8-mine" style="opacity:0">${Array(myCount).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>
       <div id="s8-step2" style="display:none;margin-top:.75rem">
-        <p class="s8-label">Con chi?</p>
+        <p class="s8-label">${t('with_whom')}</p>
         <div class="special-opts" id="s8-opp"></div>
         <div id="s8-theirs"></div>
       </div>`;
@@ -973,7 +1017,7 @@ function showSpecial(type,card){
             const tid=btn.dataset.id,cnt=parseInt(btn.dataset.count);
             $('s8-opp').querySelectorAll('.special-opt').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
             $('s8-theirs').innerHTML=`
-              <p class="s8-label">Quale carta?</p>
+              <p class="s8-label">${t('which_card')}</p>
               <div class="special-hand-row">${Array(cnt).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>`;
             $('s8-theirs').querySelectorAll('.card-3d').forEach(cb=>{
               cb.addEventListener('click',()=>{
@@ -1101,17 +1145,19 @@ function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard)
   const overlay = document.createElement('div');
   overlay.className = 'atk-reveal-overlay';
   overlay.innerHTML = `<div class="ar-box">
-    <div class="ar-who">⚔ ${esc(auName)}${isMe?' (tu)':''} tenta un attacco!</div>
+    <div class="ar-who">${_lang==='en'
+      ? `Attack by ${esc(auName)}${isMe?' (you)':''}!`
+      : `${esc(auName)}${isMe?' (tu)':''} tenta un attacco!`}</div>
 
     <!-- Step 1: show discard card (immediately visible) -->
     <div class="ar-step" id="ar-step1">
-      <div class="ar-vs-lbl">Carta da abbinare:</div>
+      <div class="ar-vs-lbl">${_lang==='en'?'Card to match:':'Carta da abbinare:'}</div>
       ${discardCard ? cardHTML({...discardCard,known:true}) : '<div class="ar-unknown">?</div>'}
     </div>
 
     <!-- Step 2: suspense then reveal attack card -->
     <div class="ar-step ar-hidden" id="ar-step2">
-      <div class="ar-vs-lbl">Carta dell'attaccante:</div>
+      <div class="ar-vs-lbl">${_lang==='en'?'Attacker card:':"Carta dell'attaccante:"}</div>
       <div class="ar-dots"><span></span><span></span><span></span></div>
       <div class="ar-attack-card ar-hidden" id="ar-atk-card">
         ${cardHTML({...card,known:true},{cls:'anim-appear'})}
@@ -1121,8 +1167,8 @@ function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard)
     <!-- Result -->
     <div class="ar-result ar-hidden" id="ar-res">
       ${success
-        ? '<div class="ar-success">✅ AZZECCATO!</div>'
-        : `<div class="ar-fail">❌ SBAGLIATO!${penaltyCard?'<div class="ar-penalty">+1 carta in mano</div>':''}</div>`}
+        ? `<div class="ar-success">${_lang==='en'?'CORRECT!':'AZZECCATO!'}</div>`
+        : `<div class="ar-fail">${_lang==='en'?'WRONG!':'SBAGLIATO!'}${penaltyCard?`<div class="ar-penalty">${_lang==='en'?'+1 card in hand':'+1 carta in mano'}</div>`:''}</div>`}
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -1152,19 +1198,19 @@ function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard)
 }
 
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
-function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
+function showSwapAnimation(initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
   document.querySelector('.swap-overlay')?.remove();
   SFX.play('Swapswoosh', 0.75);
 
   const makePile = (n) =>
-    Array(Math.min(n, 5)).fill(0)
+    Array(Math.min(n, 8)).fill(0)
       .map(() => cardHTML({known:false},{cls:'swap-mini-back'}))
       .join('');
 
   const overlay = document.createElement('div');
   overlay.className = 'swap-overlay';
   overlay.innerHTML = `<div class="swap-box">
-    <div class="swap-title">🔄 Scambio!</div>
+    <div class="swap-title">${t('swap_title')}</div>
     <div class="swap-piles-row">
       <div class="swap-section">
         <div class="swap-pname">${esc(initiatorName)}</div>
@@ -1184,14 +1230,16 @@ function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
   setTimeout(() => {
     const lCards = Array.from(overlay.querySelectorAll('#spl-l .swap-mini-back'));
     const rCards = Array.from(overlay.querySelectorAll('#spl-r .swap-mini-back'));
-    const src = lCards[lCards.length - 1]; // last card on left
-    const dst = rCards[rCards.length - 1]; // last card on right
+    const src = lCards[Math.max(0, Math.min(initiatorIndex, lCards.length - 1))];
+    const dst = rCards[Math.max(0, Math.min(targetIndex, rCards.length - 1))];
     if (!src || !dst) return;
 
     const sr = src.getBoundingClientRect();
     const dr = dst.getBoundingClientRect();
 
     // Highlight source cards
+    src.classList.add('swap-selected-source');
+    dst.classList.add('swap-selected-target');
     src.style.outline = '2px solid var(--gold)';
     dst.style.outline = '2px solid var(--gold)';
 
@@ -1243,11 +1291,20 @@ function showSwapAnimation(initiatorName, targetName, iCount, tCount) {
   }, 3500);
 }
 
-socket.on('game:swap-reveal', ({initiatorUserId, initiatorUsername, targetUserId, targetUsername}) => {
+socket.on('game:swap-reveal', ({
+  initiatorUserId, initiatorUsername, targetUserId, targetUsername,
+  initiatorCardIndex=0, targetCardIndex=0,
+}) => {
   const gs = S.gameState;
   const iCount = gs?.players.find(p => p.userId === initiatorUserId)?.cardCount || 4;
   const tCount = gs?.players.find(p => p.userId === targetUserId)?.cardCount || 4;
-  showSwapAnimation(initiatorUsername, targetUsername, iCount, tCount);
+  const iVisual = String(initiatorUserId) === String(S.userId)
+    ? Math.max(0, (S.handOrder || []).indexOf(initiatorCardIndex))
+    : initiatorCardIndex;
+  const tVisual = String(targetUserId) === String(S.userId)
+    ? Math.max(0, (S.handOrder || []).indexOf(targetCardIndex))
+    : targetCardIndex;
+  showSwapAnimation(initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
@@ -1554,6 +1611,11 @@ socket.on('game:chat-msg', ({username, text}) => {
   addLog(`💬 ${esc(username)}: ${esc(text)}`, 'chat');
   if (username !== S.username) toast(`💬 ${esc(username)}: ${esc(text)}`, '', 4000);
 });
+socket.on('game:bot-reaction', ({username, key}) => {
+  const text=t(key);
+  addLog(`BOT ${username}: ${text}`, 'chat');
+  toast(`${username}: ${text}`, '', 4000);
+});
 
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
@@ -1639,14 +1701,14 @@ window.buioTest = {
     showAttackReveal(S.userId,S.username||'Tu',fc,success,success?null:{suit:'denari',value:1},{suit:'denari',value:7,label:'7',symbol:'♦',color:'red',isSpecial:false});
   },
   // Show swap UI test
-  testSwap(){ showSwapAnimation('Mario','Luigi',4,4); },
+  testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
   // Test card raise (set specific card to raise level)
   raise(visualIdx,level=1){ if(!S.cardRaise)S.cardRaise=Array(4).fill(0); S.cardRaise[visualIdx]=level%4; renderMyHand(); },
 };
 console.log('%c🃏 buioTest ready: play(), autoPlay(), state(), testReveal(), testSwap()', 'color:#F0A030;font-weight:bold');
 
 // ── Language switcher (IT ↔ EN) ───────────────────────────────────────────
-const TRANSLATIONS = {
+const LEGACY_TRANSLATIONS = {
   en: {
     'brand-tagline':    'Your memory is your light, strategy your guide.',
     'login-username':   'Username',     // placeholder
@@ -1665,14 +1727,14 @@ const TRANSLATIONS = {
 };
 let _lang = localStorage.getItem('buio_lang') || 'it';
 
-function toggleLang() {
+function legacyToggleLang() {
   _lang = _lang === 'it' ? 'en' : 'it';
   localStorage.setItem('buio_lang', _lang);
   applyLang();
 }
-window.toggleLang = toggleLang;
+window.toggleLang = legacyToggleLang;
 
-function applyLang() {
+function legacyApplyLang() {
   const btn = $('lang-toggle');
   if (!btn) return;
   const en = _lang === 'en';
@@ -1680,7 +1742,7 @@ function applyLang() {
 
   // brand tagline
   const tagline = document.querySelector('.brand-tagline');
-  if (tagline) tagline.textContent = en ? TRANSLATIONS.en['brand-tagline'] : 'La tua memoria è la tua luce, la strategia la tua guida.';
+  if (tagline) tagline.textContent = en ? LEGACY_TRANSLATIONS.en['brand-tagline'] : 'La tua memoria è la tua luce, la strategia la tua guida.';
 
   // form placeholders
   const lp = { 'login-username':en?'Username':'Username', 'login-password':en?'Password':'Password',
@@ -1706,8 +1768,153 @@ function applyLang() {
   const so=document.querySelector('.auth-signoff'); if(so) so.textContent='Made with ❤️ by Carlo';
 }
 
+const I18N = {
+  it: {
+    brand_tagline:'La tua memoria è la tua luce, la strategia la tua guida.',
+    login:'Accedi', register:'Registrati', enter_game:'Entra nel Gioco', create_account:'Crea Account',
+    logout:'Esci', create_game:'Crea Partita', room_name:'Nome Stanza', players:'Giocatori (2-8)',
+    create_room:'Crea Stanza', play_bot:'Gioca vs Bot - Partenza Rapida',
+    bot_difficulty:'Difficolta bot', easy:'Facile', medium:'Medio', hard:'Difficile',
+    available_games:'Partite Disponibili', no_games:'Nessuna partita. Creane una!',
+    how_to_play:'Come si gioca', start_game:'Inizia Partita', add_bot:'Aggiungi Bot',
+    leave:'Lascia', skip:'Salta', next_round:'Prossimo Round', back_lobby:'Lobby',
+    deck:'MAZZO', discards:'SCARTI', drawn:'Pescata', draw:'Pesca', knock:'Busso',
+    attack:'Attacca!', discard:'Scarta', waiting_turn:'In attesa del prossimo turno',
+    spectator:'Spettatore', your_turn:'Giochi te!', choose_card:'Scegli carta!',
+    discard_first:'Scarta prima!', attack_running:'Attacco in corso...',
+    choose_special:'Scegli l’azione per la carta speciale', swap:'Scambia',
+    choose_swap:'Scegli la tua carta, poi quella di un avversario', your_card:'La tua carta',
+    with_whom:'Con chi?', which_card:'Quale carta?', swap_title:'Scambio!',
+    chat_placeholder:'Scrivi un messaggio...',
+    knock_confirm:'Vuoi davvero bussare? Tutti gli altri faranno un ultimo turno.',
+    bot_attack_hit_1:'Bella mossa. Questa ha fatto male.',
+    bot_attack_hit_2:'Te la sei ricordata davvero. Rispetto.',
+    bot_attack_hit_3:'Va bene, quella era forte.',
+    bot_attack_miss_1:'Il buio ti ha tradito questa volta.',
+    bot_attack_miss_2:'Coraggioso. Non corretto, ma coraggioso.',
+  },
+  en: {
+    brand_tagline:'Your memory is your light, strategy your guide.',
+    login:'Login', register:'Register', enter_game:'Enter the Game', create_account:'Create Account',
+    logout:'Log out', create_game:'Create Game', room_name:'Room Name', players:'Players (2-8)',
+    create_room:'Create Room', play_bot:'Play vs Bot - Quick Start',
+    bot_difficulty:'Bot difficulty', easy:'Easy', medium:'Medium', hard:'Hard',
+    available_games:'Available Games', no_games:'No games available. Create one!',
+    how_to_play:'How to play', start_game:'Start Game', add_bot:'Add Bot',
+    leave:'Leave', skip:'Skip', next_round:'Next Round', back_lobby:'Lobby',
+    deck:'DECK', discards:'DISCARD', drawn:'Drawn', draw:'Draw', knock:'Knock',
+    attack:'Attack!', discard:'Discard', waiting_turn:'Waiting for the next turn',
+    spectator:'Spectating', your_turn:'Your turn!', choose_card:'Choose a card!',
+    discard_first:'Discard first!', attack_running:'Attack in progress...',
+    choose_special:'Choose the special-card action', swap:'Swap',
+    choose_swap:'Choose your card, then an opponent card', your_card:'Your card',
+    with_whom:'Swap with whom?', which_card:'Which card?', swap_title:'Swap!',
+    chat_placeholder:'Write a message...',
+    knock_confirm:'Knock now? Every other player will take one final turn.',
+    bot_attack_hit_1:'Nice move. That one hurt.',
+    bot_attack_hit_2:'You really remembered it. Respect.',
+    bot_attack_hit_3:'All right, that was strong.',
+    bot_attack_miss_1:'The dark betrayed you this time.',
+    bot_attack_miss_2:'Bold. Not correct, but bold.',
+  },
+};
+
+function t(key) {
+  return I18N[_lang]?.[key] || I18N.it[key] || key;
+}
+
+function setLanguageToggle() {
+  _lang = _lang === 'it' ? 'en' : 'it';
+  localStorage.setItem('buio_lang', _lang);
+  applyLang();
+  if(S.token){
+    S._languageSave=fetch('/api/preferences/language',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${S.token}`},
+      body:JSON.stringify({language:_lang}),
+    }).then(response=>{
+      if(!response.ok) throw new Error(`Language save failed (${response.status})`);
+      return response.json();
+    }).catch(error=>({error:error.message}));
+  }
+}
+window.toggleLang=setLanguageToggle;
+
+function applyLang() {
+  const en=_lang==='en';
+  document.documentElement.lang=_lang;
+  document.title=en?'BUIO - Card Game':'BUIO - Gioco di Carte';
+  if($('lang-toggle'))$('lang-toggle').textContent=en?'IT':'EN';
+  if($('lobby-lang-toggle'))$('lobby-lang-toggle').textContent=en?'IT':'EN';
+  const tagline=document.querySelector('.brand-tagline');
+  if(tagline)tagline.textContent=t('brand_tagline');
+  $('reg-username').placeholder=en?'Choose username (min 3)':'Scegli username (min 3)';
+  document.querySelectorAll('.auth-tab').forEach(tab=>{
+    tab.textContent=t(tab.dataset.tab==='login'?'login':'register');
+  });
+  document.querySelector('#form-login button[type=submit]').textContent=t('enter_game');
+  document.querySelector('#form-register button[type=submit]').textContent=t('create_account');
+  const textById={
+    'btn-logout':'logout','btn-create-room':'create_room','btn-vs-bot':'play_bot',
+    'difficulty-label':'bot_difficulty','btn-start-game':'start_game','btn-add-bot':'add_bot',
+    'btn-leave-room':'leave','btn-special-skip':'skip','btn-next-round':'next_round',
+    'btn-back-lobby':'back_lobby','btn-draw':'draw','btn-knock':'knock',
+    'btn-attack':'attack','btn-discard-drawn':'discard',
+  };
+  Object.entries(textById).forEach(([id,key])=>{if($(id))$(id).textContent=t(key);});
+  ['easy','medium','hard'].forEach(level=>{
+    const label=document.querySelector(`label[for="bot-${level}"]`);
+    if(label)label.textContent=t(level);
+  });
+  const heads=document.querySelectorAll('.lobby-create-panel h2,.lobby-list-panel h2');
+  if(heads[0])heads[0].textContent=t('create_game');
+  if(heads[1])heads[1].textContent=t('available_games');
+  const fields=document.querySelectorAll('.lobby-create-panel .field label');
+  if(fields[0])fields[0].textContent=t('room_name');
+  if(fields[1])fields[1].textContent=t('players');
+  const rulesTitle=document.querySelector('.rules-box h3');
+  if(rulesTitle)rulesTitle.textContent=t('how_to_play');
+  const rules=document.querySelector('.rules-box ul');
+  if(rules) rules.innerHTML=en
+    ? `<li>4 face-down cards - peek at the <b>first 2</b> at the start</li>
+       <li>Draw, then discard - keep your score low (Ace=1 through King=10)</li>
+       <li><b>Attack</b> whenever you remember a card matching the discard</li>
+       <li><b>Knock</b> when you believe your score is low enough</li>
+       <li>The highest score loses a life - you have 3 lives</li>
+       <li><b>Special cards when discarded:</b></li>
+       <li>Eight: swap one of your cards with an opponent card</li>
+       <li>Nine: peek at one of your face-down cards</li>
+       <li>Ten: the next player discards before drawing</li>`
+    : `<li>4 carte coperte - sbircia le <b>prime 2</b> all'inizio</li>
+       <li>Pesca dal mazzo, poi scarta - tieni basso il punteggio (A=1 fino a Re=10)</li>
+       <li><b>Attacca</b> quando ricordi una carta uguale allo scarto</li>
+       <li><b>Busso</b> quando credi di avere pochi punti</li>
+       <li>Chi ha più punti perde una vita - hai 3 vite</li>
+       <li><b>Carte speciali quando vengono scartate:</b></li>
+       <li>Otto: scambia una tua carta con quella di un avversario</li>
+       <li>Nove: sbircia una tua carta coperta</li>
+       <li>Dieci: il prossimo giocatore scarta prima di pescare</li>`;
+  const piles=document.querySelectorAll('.pile-lbl');
+  if(piles[0])piles[0].textContent=t('deck');
+  if(piles[1])piles[1].textContent=t('discards');
+  const drawnLabel=document.querySelector('.drawn-lbl');
+  if(drawnLabel)drawnLabel.textContent=t('drawn');
+  if($('chat-input'))$('chat-input').placeholder=t('chat_placeholder');
+  const peekTitle=document.querySelector('#panel-peek h2');
+  if(peekTitle)peekTitle.textContent=en?'Memorise your cards!':'Memorizza le tue carte!';
+  const peekHint=document.querySelector('#panel-peek .hint-text');
+  if(peekHint)peekHint.innerHTML=en
+    ? `You have <strong id="peek-timer-val">10</strong>s - then they turn face-down for good!`
+    : `Hai <strong id="peek-timer-val">10</strong>s - poi tornano coperte per sempre!`;
+  const scoringTitle=document.querySelector('#panel-scoring h2');
+  if(scoringTitle)scoringTitle.innerHTML=`${en?'Round complete':'Fine Round'} <span id="scoring-round"></span>`;
+  if(S.gameState){renderBoard();renderTurnBanner();}
+}
+$('lobby-lang-toggle').addEventListener('click',setLanguageToggle);
+
 (function(){
   S._selIdx=-1;
+  preloadCardImages();
   hydrateAppVersion();
   applyLang(); // apply saved language on load
   // Set mute button icon from saved preference

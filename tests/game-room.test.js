@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const GameRoom = require('../game/GameRoom');
+const BotStrategy = require('../game/BotStrategy');
 
 function makeCard(value, suit = 'denari') {
   return {
@@ -38,6 +39,61 @@ function makeStartedRoom() {
   assert.deepStrictEqual(player.hand.map(c => c.value), [4, 2, 5, 6]);
   assert.deepStrictEqual([...player.seenCards].sort(), [0, 3]);
   assert.strictEqual(room.discardPile.at(-1).value, 7);
+}
+
+{
+  const room = makeStartedRoom();
+  const player = room.players[0];
+  const target = room.players[1];
+  player.hand = [makeCard(4), makeCard(9), makeCard(2), makeCard(5)];
+  target.hand = [makeCard(7), makeCard(1), makeCard(6), makeCard(3)];
+  player.seenCards = new Set([0, 1, 2, 3]);
+  room.phase = 'special';
+
+  const result = room.useSpecial8Full('p1', 1, 'p2', 3);
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.initiatorCardIndex, 1);
+  assert.strictEqual(result.targetCardIndex, 3);
+  assert.strictEqual(player.hand[1].value, 3);
+  assert.strictEqual(target.hand[3].value, 9);
+}
+
+{
+  const player = {
+    hand: [makeCard(2), makeCard(9), makeCard(5), makeCard(7)],
+    seenCards: new Set([0, 1, 2, 3]),
+  };
+  const drawn = makeCard(4);
+  assert.strictEqual(BotStrategy.chooseDiscard(player, drawn, 'hard', () => 0), 1);
+  assert.strictEqual(BotStrategy.chooseDiscard(player, makeCard(10), 'hard', () => 0), -1);
+  assert.strictEqual(BotStrategy.chooseDiscard(player, drawn, 'easy', () => 0.99), 3);
+}
+
+{
+  const room = makeStartedRoom();
+  const player = room.players[0];
+  player.hand = [makeCard(1), makeCard(2), makeCard(3), makeCard(4)];
+  player.seenCards = new Set([0, 1, 2, 3]);
+  room.phase = 'draw';
+  room.deck = Array(20).fill(makeCard(5));
+  assert.strictEqual(BotStrategy.shouldKnock(player, room, 'hard', () => 0), true);
+  player.hand[3] = makeCard(10);
+  assert.strictEqual(BotStrategy.shouldKnock(player, room, 'hard', () => 0), false);
+}
+
+{
+  const player = {
+    hand: [makeCard(2), makeCard(10), makeCard(6), makeCard(4)],
+    seenCards: new Set([0, 1, 2, 3]),
+  };
+  const opponents = [{
+    userId: 'p2',
+    hand: [makeCard(7), makeCard(1), makeCard(8), makeCard(3)],
+    seenCards: new Set([0, 1]),
+  }];
+  const choice = BotStrategy.chooseSwap(player, opponents, 'hard', () => 0);
+  assert.deepStrictEqual(choice, { myCardIndex: 1, targetUserId: 'p2', targetCardIndex: 0 });
 }
 
 {

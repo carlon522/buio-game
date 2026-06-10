@@ -73,10 +73,31 @@ async function registerAndStartBotGame(page, suffix) {
   await page.waitForSelector('#screen-lobby.active', { timeout: 5000 });
   await assertVersionBadge(page, 'lobby');
 
+  await page.click('#lobby-lang-toggle');
+  const englishLabels = await page.evaluate(async () => {
+    const saved=await S._languageSave;
+    return {
+      language:document.documentElement.lang,
+      difficulty:document.querySelector('#difficulty-label')?.textContent,
+      playBot:document.querySelector('#btn-vs-bot')?.textContent,
+      hasToken:Boolean(S.token),
+      savedLanguage:saved?.language,
+      saveError:saved?.error,
+    };
+  });
+  if (!englishLabels.hasToken || englishLabels.savedLanguage !== 'en' ||
+      englishLabels.language !== 'en' || englishLabels.difficulty !== 'Bot difficulty' ||
+      !englishLabels.playBot.includes('Play vs Bot')) {
+    throw new Error(`English lobby translation was not applied: ${JSON.stringify(englishLabels)}`);
+  }
+
+  await page.click('label[for="bot-hard"]');
   await page.click('#btn-vs-bot');
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.phase === 'draw', null, { timeout: 10000 });
   await page.waitForFunction(() => typeof S !== 'undefined' && S.gameState?.currentPlayerUserId === S.userId, null, { timeout: 10000 });
   await assertVersionBadge(page, 'game');
+  const difficulty = await page.evaluate(() => S.gameState?.botDifficulty);
+  if (difficulty !== 'hard') throw new Error(`Bot difficulty was not applied: ${difficulty}`);
 }
 
 async function drawCard(page) {
@@ -97,6 +118,17 @@ async function waitForCardMotion(page) {
     null,
     { timeout: 8000 }
   );
+}
+
+async function assertDecodedCardFronts(page) {
+  await page.waitForFunction(() => [...document.querySelectorAll('.card-front')].every(card =>
+    card.classList.contains('image-ready') || card.classList.contains('image-error')
+  ), null, { timeout: 5000 });
+  const blank = await page.evaluate(() => [...document.querySelectorAll('.card-front')].some(card => {
+    const bg = getComputedStyle(card).backgroundColor;
+    return !card.classList.contains('image-ready') && (bg === 'rgb(255, 255, 255)' || bg === 'rgb(245, 240, 232)');
+  }));
+  if (blank) throw new Error('A card front exposed a white loading frame');
 }
 
 async function assertStableTurnBar(page, expectedHeight = null) {
@@ -234,6 +266,7 @@ async function main() {
     if (stalePeekVisible) throw new Error('Peek status remained visible after the peek phase ended');
     const turnBarHeight = await assertStableTurnBar(page);
     await drawCard(page);
+    await assertDecodedCardFronts(page);
     await assertStableTurnBar(page, turnBarHeight);
     const beforeKeep = await page.evaluate(() => ({
       handCount: document.querySelectorAll('#my-hand .card-3d').length,
@@ -249,6 +282,23 @@ async function main() {
     });
     await page.locator('#my-hand .card-3d').nth(discardVisualIndex).click();
     await waitForCardMotion(page);
+    const landingReveal = await page.evaluate(() => ({
+      keptIndex: S._keptRevealServerIdx,
+      rightFaceUp: document.querySelector('#my-hand .card-3d:last-child')?.classList.contains('card-front'),
+    }));
+    if (landingReveal.keptIndex === null || !landingReveal.rightFaceUp) {
+      throw new Error(`Kept card did not land face-up at the right edge: ${JSON.stringify(landingReveal)}`);
+    }
+    await page.waitForTimeout(1100);
+    const stillRevealed = await page.locator('#my-hand .card-3d:last-child').evaluate(el => el.classList.contains('card-front'));
+    if (!stillRevealed) throw new Error('Kept card face-up beat was too short');
+    await assertOpponentDiscardMotion(page, turnBarHeight);
+    await page.waitForFunction(() =>
+      S._keptRevealServerIdx === null &&
+      document.querySelector('#my-hand .card-3d:last-child')?.classList.contains('card-back'),
+      null,
+      { timeout: 4000 }
+    );
     const afterKeep = await page.evaluate(() => ({
       handCount: document.querySelectorAll('#my-hand .card-3d').length,
       drawnVisible: !document.querySelector('#drawn-slot')?.classList.contains('hidden'),
@@ -258,8 +308,18 @@ async function main() {
     if (beforeKeep.handCount !== afterKeep.handCount || afterKeep.drawnVisible || afterKeep.rightHidden || !afterKeep.discardHasImg) {
       throw new Error(`Keep-drawn animation ended in invalid state: ${JSON.stringify({ beforeKeep, afterKeep })}`);
     }
-    await assertOpponentDiscardMotion(page, turnBarHeight);
     await assertAttackOverlayLayout(page);
+    await page.evaluate(() => buioTest.testSwap());
+    await page.waitForSelector('.swap-selected-source');
+    const swapSlots = await page.evaluate(() => ({
+      source: [...document.querySelectorAll('#spl-l .swap-mini-back')].indexOf(document.querySelector('.swap-selected-source')),
+      target: [...document.querySelectorAll('#spl-r .swap-mini-back')].indexOf(document.querySelector('.swap-selected-target')),
+    }));
+    if (swapSlots.source !== 0 || swapSlots.target !== 3) {
+      throw new Error(`Swap animation selected wrong slots: ${JSON.stringify(swapSlots)}`);
+    }
+    await page.evaluate(() => document.querySelector('.swap-overlay')?.remove());
+
 
     const page2 = await browser.newPage();
     page2.on('console', msg => {

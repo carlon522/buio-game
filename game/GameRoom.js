@@ -4,7 +4,7 @@ const INITIAL_LIVES = 3;
 const CARDS_PER_PLAYER = 4;
 
 class GameRoom {
-  constructor(id, hostUserId, hostUsername, name, maxPlayers = 4) {
+  constructor(id, hostUserId, hostUsername, name, maxPlayers = 4, options = {}) {
     this.id = id;
     this.name = name;
     this.hostUserId = String(hostUserId);
@@ -23,6 +23,7 @@ class GameRoom {
     this.lastRoundQueue = [];
     this.roundNumber = 0;
     this.readyPlayers = new Set();
+    this.botDifficulty = options.botDifficulty || 'medium';
     this.addPlayer(hostUserId, hostUsername, null);
   }
 
@@ -384,7 +385,9 @@ class GameRoom {
       initiatorCard: myCard,     // the card the initiator gave away
       targetCard: targetCard,    // the card the target gave away
       targetUserId: target.userId,
-      targetUsername: target.username
+      targetUsername: target.username,
+      initiatorCardIndex: myCardIndex,
+      targetCardIndex
     };
   }
 
@@ -516,6 +519,7 @@ class GameRoom {
       roundNumber: this.roundNumber,
       hostUserId: this.hostUserId,
       maxPlayers: this.maxPlayers,
+      botDifficulty: this.botDifficulty,
       currentPlayerUserId: this.getCurrentPlayer()?.userId || null,
       knockedBy: this.knockedBy,
       lastRound: this.lastRound,
