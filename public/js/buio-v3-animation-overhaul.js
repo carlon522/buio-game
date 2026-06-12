@@ -58,6 +58,7 @@
     const g=document.createElement('div');
     g.className=`${faceUp(card)?'card-3d card-front':'card-3d card-back'} card-ghost ${opts.className||''}`.trim();
     g.innerHTML=ghostHTML(card);
+    if(faceUp(card)&&typeof _decodedCardImages!=='undefined'&&_decodedCardImages.has(`/cards/${card.suit}_${card.value}.jpg`)) g.classList.add('image-ready');
     Object.assign(g.style,{
       position:'fixed',left:`${from.left}px`,top:`${from.top}px`,width:`${from.width}px`,height:`${from.height}px`,
       margin:'0',zIndex:String(opts.z||9990),pointerEvents:'none',boxSizing:'border-box',
@@ -86,9 +87,9 @@
       const frame=now=>{
         if(started===null) started=now;
         const raw=clamp((now-started)/duration,0,1);
-        const t=smoother(raw);
-        const x=bezier(from.left,c.left,end.left,t)-from.left;
-        const y=bezier(from.top,c.top,end.top,t)-from.top;
+        const t=opts.linear?raw:smoother(raw);
+        const x=(opts.linear?lerp(from.left,end.left,t):bezier(from.left,c.left,end.left,t))-from.left;
+        const y=(opts.linear?lerp(from.top,end.top,t):bezier(from.top,c.top,end.top,t))-from.top;
         const sx=lerp(1,end.width/Math.max(1,from.width),t);
         const sy=lerp(1,end.height/Math.max(1,from.height),t);
         const rot=Math.sin(Math.PI*raw)*spin;
@@ -98,15 +99,16 @@
         g.style.opacity=String(lerp(1,opts.endOpacity??1,easeOut(clamp(fadeT,0,1))));
         if(raw<1){requestAnimationFrame(frame);return;}
         g.style.transform=`translate3d(${end.left-from.left}px,${end.top-from.top}px,0) scale(${end.width/Math.max(1,from.width)},${end.height/Math.max(1,from.height)}) rotate(0deg)`;
-        opts.onDone?.(g);
-        resolve(g);
+        const finish=()=>{opts.onDone?.(g);resolve(g);};
+        const hold=opts.landingHoldMs??0;
+        if(hold>0) setTimeout(finish,hold); else finish();
       };
       requestAnimationFrame(()=>requestAnimationFrame(frame));
     });
   }
 
-  const removeOnDone=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
-  const landOnPile=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
+  const removeOnDone=(done,removeDelay=90)=>g=>{Promise.resolve(done?.()).finally(()=>setTimeout(()=>g?.remove(),removeDelay));};
+  const landOnPile=(done,removeDelay=90)=>g=>{Promise.resolve(done?.()).finally(()=>setTimeout(()=>g?.remove(),removeDelay));};
 
   Object.assign(Cards,{
     drawFromDeck(onDone){return fly({from:Cards.rect(document.getElementById('deck-pile')),to:Cards.drawnCardRect()||Cards.rect(document.getElementById('drawn-slot')),duration:D.draw,arc:24,spin:2,face:'down',z:9995,onDone:removeOnDone(onDone)});},
@@ -115,18 +117,18 @@
     discardDrawnCard(opts){return fly({from:opts.drawnSlotRect,to:opts.pileRect,card:opts.card,duration:D.discard,arc:-50,spin:-4,z:9999,onDone:landOnPile(opts.onLand)});},
     discardHandCard(opts){
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.discard,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});
-      return fly({from:opts.drawnSlotRect,to:opts.appendSlotRect,card:opts.drawnCard,face:opts.drawnFace||'auto',duration:D.keep,arc:-18,spin:2,z:9998,onDone:removeOnDone(opts.onHandLand)});
+      return fly({from:opts.drawnSlotRect,to:opts.appendSlotRect,card:opts.drawnCard,face:opts.drawnFace||'auto',duration:D.keep,arc:0,spin:0,linear:true,landingHoldMs:120,z:9998,onDone:removeOnDone(opts.onHandLand,180)});
     },
     discardHandToPile(handSlotRect,pileRect,card,onLand){return fly({from:handSlotRect,to:pileRect,card,duration:D.discard,arc:-52,spin:-4,z:9999,onDone:landOnPile(onLand)});},
-    keepDrawnToHand(drawnSlotRect,appendSlotRect,card,onLand){return fly({from:drawnSlotRect,to:appendSlotRect,card,duration:D.keep,arc:-18,spin:2,z:9998,onDone:removeOnDone(onLand)});},
+    keepDrawnToHand(drawnSlotRect,appendSlotRect,card,onLand){return fly({from:drawnSlotRect,to:appendSlotRect,card,duration:D.keep,arc:0,spin:0,linear:true,landingHoldMs:120,z:9998,onDone:removeOnDone(onLand,180)});},
     forcedReplacement(deckRect,appendSlotRect,onLand){return fly({from:deckRect,to:appendSlotRect,face:'down',duration:D.keep,arc:-20,spin:2,z:9998,onDone:removeOnDone(onLand)});},
     forcedDiscard(opts){
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.forced,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});
       return fly({from:opts.deckRect,to:opts.appendSlotRect||opts.targetSlotRect,card:opts.drawCard,face:opts.drawFace||'down',duration:D.keep,arc:-20,spin:2,z:9998,onDone:removeOnDone(opts.onDeckLand)});
     },
-    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:-32,spin:1.5,z:9990,onDone:removeOnDone(onLand)});},
-    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:-54,spin:-3,z:9995,onDone:landOnPile(onLand)});},
-    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:-24,spin:1.5,z:9994,onDone:removeOnDone(onLand)});},
+    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:0,spin:0,linear:true,landingHoldMs:100,z:9990,onDone:removeOnDone(onLand,140)});},
+    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:0,spin:0,linear:true,landingHoldMs:80,z:9995,onDone:landOnPile(onLand,120)});},
+    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:0,spin:0,linear:true,landingHoldMs:100,z:9994,onDone:removeOnDone(onLand,140)});},
     swap(rectA,rectB,onDone){
       let done=0;const oneDone=()=>{if(++done===2)onDone?.();};
       const a=fly({from:rectA,to:rectB,face:'down',duration:D.swap,arc:-58,spin:3,z:9992,onDone:removeOnDone(oneDone)});
