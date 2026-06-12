@@ -175,4 +175,19 @@ function makeStartedRoom() {
   assert.strictEqual(room.discardPile.at(-1).value, 2);
 }
 
+{
+  const room = makeStartedRoom();
+  const player = room.players[0];
+  player.hand = [makeCard(4), makeCard(10), makeCard(2), makeCard(5)];
+  room.discardPile = [makeCard(10, 'coppe')];
+  room.deck = [makeCard(1)];
+  room.phase = 'forced-discard';
+
+  const result = room.forcedDiscardFromHand('p1', 1);
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(room.phase, 'draw');
+  assert.notStrictEqual(room.getCurrentPlayer().userId, 'p1');
+  assert.deepStrictEqual(player.hand.map(c => c.value), [4, 2, 5, 1]);
+}
 console.log('GameRoom logic tests passed.');

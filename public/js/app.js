@@ -20,6 +20,7 @@ const S = {
   _peekRevealed:null,       // Set of visual indices currently flipped face-up for peek
   _peekDuration:0,          // ms of peek timer
   _nove9Mode:false,         // true when card 9 is active and user must tap a hand card
+  _swap8Mode:null,          // {selectedMyVI} while card 8 inline switch is active
   _tempRevealServerIdx:null,// server card index temporarily shown face-up (card 9)
   _keptRevealServerIdx:null,// kept drawn card stays face-up briefly after landing
   _keptRevealTimer:null,
@@ -38,6 +39,7 @@ const S = {
   _attackFieldTimers:null,
   _removalGap:null,
   _turnReadyTimer:null,
+  _forcedDiscardBusy:false,
 };
 
 const socket = io({ autoConnect: false });
@@ -630,6 +632,7 @@ socket.on('game:private',priv=>{
     S._pendingPrivateState=priv;
     return;
   }
+  if(priv?.drawnCard || S.gameState?.phase!=='forced-discard') S._forcedDiscardBusy=false;
   S.privateState=priv;
   // Always sync drawn card from authoritative server state.
   // priv.drawnCard is non-null only when you are current player with a drawn card.
@@ -852,7 +855,8 @@ function renderSeats() {
         ? motion.targetIndex===i && ['keep','forced'].includes(motion.kind)
         : motion?.sourceIndex===i && motion.kind!=='discard-drawn';
       const dealHidden=_dealBusy&&!S._dealLanded?.has(`${player.userId}:${i}`);
-      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden&&!gap?' motion-hidden':''}${gap?' mini-gap':''}${attackGap?' attack-source-gap':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
+      const swapSelectable=S._swap8Mode&&S._swap8Mode.selectedMyVI!==null&&!S._swap8Mode.busy&&!player.isEliminated&&!incoming&&!hidden&&!gap&&!dealHidden;
+      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden&&!gap?' motion-hidden':''}${gap?' mini-gap':''}${attackGap?' attack-source-gap':''}${dealHidden?' deal-hidden':''}${swapSelectable?' swap-target-selectable':''}" data-card-index="${i}"></div>`;
     }).join('');
     const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}${motion?.hideDrawn?' motion-hidden':''}"></div>`:'';
     const current=player.isCurrentPlayer&&!player.isEliminated;
@@ -864,6 +868,11 @@ function renderSeats() {
       </div>
       <div class="seat-turn-badge${current?' active':''}">▶ Turno</div>
       ${player.isEliminated?'<div class="seat-elim-badge">☠</div>':''}`;
+    if(S._swap8Mode&&S._swap8Mode.selectedMyVI!==null&&!S._swap8Mode.busy&&!player.isEliminated){
+      seat.querySelectorAll('.mini-card.swap-target-selectable').forEach(card=>{
+        card.addEventListener('click',()=>chooseSwap8OpponentCard(player.userId, Number(card.dataset.cardIndex)));
+      });
+    }
     container.appendChild(seat);
   });
 }
@@ -960,7 +969,12 @@ function renderMyHand() {
     const attackGap=String(S._attackFieldMotion?.attackerUserId)===String(S.userId)&&
       S._attackFieldMotion?.sourceIndex===visualIdx;
     const classes=['card-3d'];
-    if((inDiscard||inForcedDiscard||S._nove9Mode)&&!attackGap&&!S._attackRevealActive) classes.push('clickable');
+    if((inDiscard||inForcedDiscard||S._nove9Mode||S._swap8Mode)&&!attackGap&&!S._attackRevealActive) classes.push('clickable');
+    if(S._swap8Mode&&!attackGap){
+      classes.push('swap-own-selectable');
+      if(S._swap8Mode.selectedMyVI===visualIdx) classes.push('swap-own-selected');
+      if(S._swap8Mode.busy) classes.push('swap-busy');
+    }
     if(S._attackMode&&!attackGap) classes.push('atk-tgt');
     if(visualIdx===S._selIdx) classes.push('selected');
     if(visualIdx===S._removalGap) classes.push('removal-gap');
@@ -1083,6 +1097,11 @@ function onHandClick(visualIdx) {
   const serverIdx=S.handOrder?S.handOrder[visualIdx]:visualIdx;
   const cardEl=$('my-hand').querySelectorAll('.card-3d')[visualIdx];
 
+  if(S._swap8Mode){
+    selectSwap8OwnCard(visualIdx);
+    return;
+  }
+
   // ── Card 9 nove9: tap card → briefly shows face-up in hand ──
   if(S._nove9Mode){
     S._nove9Mode=false;
@@ -1139,6 +1158,8 @@ function onHandClick(visualIdx) {
   }
 
   if(phase==='forced-discard'&&isMe&&!S._attackMode){
+    if(S._forcedDiscardBusy) return;
+    S._forcedDiscardBusy=true;
     SFX.play('Card');
     const handSlotRect = cardEl.getBoundingClientRect();
     const pileRect     = Cards.rect($('discard-pile'));
@@ -1356,6 +1377,46 @@ socket.on('game:drawn-card',({card,penalized})=>{
   }));
 });
 
+
+function showCenterCue(text, sub='', ms=0) {
+  let cue=document.querySelector('.center-cue');
+  if(!cue){ cue=document.createElement('div'); cue.className='center-cue'; document.body.appendChild(cue); }
+  cue.innerHTML=`<div class="center-cue-title">${esc(text)}</div>${sub?`<div class="center-cue-sub">${esc(sub)}</div>`:''}`;
+  cue.classList.remove('leaving');
+  if(ms){ clearTimeout(cue._timer); cue._timer=setTimeout(()=>hideCenterCue(),ms); }
+}
+function hideCenterCue() {
+  const cue=document.querySelector('.center-cue');
+  if(!cue) return;
+  cue.classList.add('leaving');
+  setTimeout(()=>cue.remove(),260);
+}
+function startSwap8Mode() {
+  S._swap8Mode={selectedMyVI:null,busy:false};
+  showCenterCue('Scambio', 'Scegli una tua carta');
+  addLog('🔄 Scambio: scegli una tua carta, poi una carta avversaria.','gold');
+  renderMyHand();renderSeats();renderActions();renderTurnBanner();
+}
+function selectSwap8OwnCard(visualIdx) {
+  if(!S._swap8Mode||S._swap8Mode.busy) return;
+  S._swap8Mode.selectedMyVI=visualIdx;
+  showCenterCue('Scambio', 'Ora scegli una carta avversaria');
+  renderMyHand();renderSeats();
+}
+function chooseSwap8OpponentCard(targetUserId,targetCardIndex) {
+  if(!S._swap8Mode||S._swap8Mode.busy||S._swap8Mode.selectedMyVI===null) return;
+  const myServerIdx=S.handOrder?S.handOrder[S._swap8Mode.selectedMyVI]:S._swap8Mode.selectedMyVI;
+  S._swap8Mode.busy=true;
+  showCenterCue('Scambio', 'Carte in movimento…');
+  socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId,targetCardIndex});
+  renderMyHand();renderSeats();
+}
+function clearSwap8Mode() {
+  S._swap8Mode=null;
+  hideCenterCue();
+  renderMyHand();renderSeats();renderActions();
+}
+
 // ── Special cards ─────────────────────────────────────────────────────────
 socket.on('game:special-prompt',({type,card})=>{S.specialPrompt={type,card};showSpecial(type,card);});
 function showSpecial(type,card){
@@ -1369,91 +1430,12 @@ function showSpecial(type,card){
     return; // skip the panel entirely
   }
 
-  show($('panel-special'));
-  // Skip button: only available for card 9 peek (8 swap is mandatory)
-  const skipBtn=$('btn-special-skip');
-  if(skipBtn) skipBtn.style.display = type==='8' ? 'none' : '';
-  $('special-card-preview').innerHTML=cardHTML({...card,known:true},{cls:'anim-appear'});
-
   if(type==='8'){
-    $('special-title').textContent=t('swap');
-    $('special-desc').textContent=t('choose_swap');
-    const myCount=S.gameState?.players.find(p=>p.userId===S.userId)?.cardCount??4;
-    const opp=(S.gameState?.players||[]).filter(p=>p.userId!==S.userId&&!p.isEliminated);
-    let selMyVI=null;
-
-    $('special-actions').innerHTML=`
-      <p class="s8-label">${t('your_card')}</p>
-      <div class="special-hand-row" id="s8-mine" style="opacity:0">${Array(myCount).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>
-      <div id="s8-step2" style="display:none;margin-top:.75rem">
-        <p class="s8-label">${t('with_whom')}</p>
-        <div class="special-opts" id="s8-opp"></div>
-        <div id="s8-theirs"></div>
-      </div>`;
-
-    // Animate hand cards flying into panel: each card ghosts from hand → panel slot
-    requestAnimationFrame(()=>{
-      const handCards=$('my-hand').querySelectorAll('.card-3d');
-      const panelSlots=$('s8-mine').querySelectorAll('.card-3d');
-      const stCS=getComputedStyle(document.documentElement);
-      Array.from(panelSlots).forEach((pCard,i)=>{
-        const hCard=handCards[i];
-        if(!hCard||!pCard) return;
-        const hr=hCard.getBoundingClientRect(), pr=pCard.getBoundingClientRect();
-        if(!hr.width||!pr.width) return;
-        const g=document.createElement('div');
-        g.className='card-3d card-back';
-        g.style.cssText=`position:fixed;left:${hr.left}px;top:${hr.top}px;width:${hr.width}px;height:${hr.height}px;z-index:9996;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.55);transition:none`;
-        document.body.appendChild(g);
-        const delay=i*55;
-        requestAnimationFrame(()=>requestAnimationFrame(()=>{
-          g.style.transition=`left 360ms ${delay}ms cubic-bezier(.25,.46,.45,.94),top 360ms ${delay}ms cubic-bezier(.25,.46,.45,.94),width 360ms ${delay}ms,height 360ms ${delay}ms`;
-          g.style.left=pr.left+'px'; g.style.top=pr.top+'px';
-          g.style.width=pr.width+'px'; g.style.height=pr.height+'px';
-        }));
-        const isLast = i === Array.from(panelSlots).length - 1;
-        setTimeout(()=>{ g.remove(); if(isLast) $('s8-mine').style.opacity='1'; },delay+400);
-      });
-    });
-
-    $('s8-mine').querySelectorAll('.card-3d').forEach(el=>{
-      el.addEventListener('click',()=>{
-        selMyVI=parseInt(el.dataset.index);
-        $('s8-mine').querySelectorAll('.card-3d').forEach(c=>c.classList.remove('selected'));
-        el.classList.add('selected');
-        $('s8-step2').style.display='';
-        $('s8-opp').innerHTML=opp.map(p=>`<button class="special-opt" data-id="${p.userId}" data-count="${p.cardCount}">${esc(p.username)} (${p.cardCount})</button>`).join('');
-        $('s8-opp').querySelectorAll('.special-opt').forEach(btn=>{
-          btn.addEventListener('click',()=>{
-            const tid=btn.dataset.id,cnt=parseInt(btn.dataset.count);
-            $('s8-opp').querySelectorAll('.special-opt').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
-            $('s8-theirs').innerHTML=`
-              <p class="s8-label">${t('which_card')}</p>
-              <div class="special-hand-row">${Array(cnt).fill(0).map((_,i)=>cardHTML({known:false,index:i},{index:i})).join('')}</div>`;
-            $('s8-theirs').querySelectorAll('.card-3d').forEach(cb=>{
-              cb.addEventListener('click',()=>{
-                const myServerIdx=S.handOrder?S.handOrder[selMyVI]:selMyVI;
-                // Cross-animate the two selected cards before closing
-                const myEl=$('s8-mine').querySelectorAll('.card-3d')[selMyVI];
-                const theirEl=cb;
-                if(myEl&&theirEl){
-                  const mr=myEl.getBoundingClientRect(), tr2=theirEl.getBoundingClientRect();
-                  [myEl,theirEl].forEach(el=>{ el.style.transition='transform .35s cubic-bezier(.25,.46,.45,.94),opacity .35s'; el.style.transform='scale(1.15)'; el.style.opacity='.6'; });
-                  setTimeout(()=>{
-                    socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId:tid,targetCardIndex:parseInt(cb.dataset.index)});
-                    hide($('panel-special'));
-                  },380);
-                } else {
-                  socket.emit('game:use-special-8',{myCardIndex:myServerIdx,targetUserId:tid,targetCardIndex:parseInt(cb.dataset.index)});
-                  hide($('panel-special'));
-                }
-              });
-            });
-          });
-        });
-      });
-    });
+    hide($('panel-special'));
+    S.specialPrompt={type,card};
+    startSwap8Mode();
   }
+
 }
 $('btn-special-skip').addEventListener('click',()=>{
   socket.emit('game:skip-special');
@@ -1463,6 +1445,7 @@ $('btn-special-skip').addEventListener('click',()=>{
 // ── Peek reveal (card 9) ───────────────────────────────────────────────────
 // 10-card effect: update private state so score is correct; no visual reveal
 socket.on('game:forced-draw-reveal',({card,serverIndex})=>{
+  S._forcedDiscardBusy=false;
   setTimeout(()=>{
     SFX.play('Card',0.3);
     if(S.privateState?.hand?.[serverIndex]) S.privateState.hand[serverIndex]={...card,known:true,index:serverIndex};
@@ -1491,7 +1474,8 @@ socket.on('game:swapped',({receivedCard})=>{
 socket.on('game:special-triggered',({username,type,card})=>{
   const names={'8':'Otto (Scambia)','9':'Nove (Sbircia)'};
   addLog(`✨ ${username} usa ${names[type]||'carta speciale'}: ${cardStr(card)}`,'gold');
-  toast(`✨ ${username} ha usato ${names[type]||'carta speciale'}!`,'',3500);
+  if(type==='8') showCenterCue('Scambio', `${username} sta scegliendo le carte`, 30000);
+  else toast(`✨ ${username} ha usato ${names[type]||'carta speciale'}!`,'',3500);
 });
 
 // 10-card effect: next player will be forced to discard first
@@ -1695,98 +1679,81 @@ async function showFieldAttack(auId,auName,card,success,penaltyCard,discardCard,
 }
 
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
-function showSwapAnimation(initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
-  document.querySelector('.swap-overlay')?.remove();
-  SFX.play('Swapswoosh', 0.75);
-
-  const makePile = (n) =>
-    Array(Math.min(n, 8)).fill(0)
-      .map(() => cardHTML({known:false},{cls:'swap-mini-back'}))
-      .join('');
-
-  const overlay = document.createElement('div');
-  overlay.className = 'swap-overlay';
-  overlay.innerHTML = `<div class="swap-box">
-    <div class="swap-title">${t('swap_title')}</div>
-    <div class="swap-piles-row">
-      <div class="swap-section">
-        <div class="swap-pname">${esc(initiatorName)}</div>
-        <div class="swap-pile-row" id="spl-l">${makePile(iCount)}</div>
-      </div>
-      <div class="swap-arrow-mid">⇄</div>
-      <div class="swap-section">
-        <div class="swap-pname">${esc(targetName)}</div>
-        <div class="swap-pile-row" id="spl-r">${makePile(tCount)}</div>
-      </div>
-    </div>
-    <div class="swap-prog-wrap"><div id="sp" class="swap-prog"></div></div>
-  </div>`;
-  document.body.appendChild(overlay);
-
-  // After layout renders, get exact card positions and animate
-  setTimeout(() => {
-    const lCards = Array.from(overlay.querySelectorAll('#spl-l .swap-mini-back'));
-    const rCards = Array.from(overlay.querySelectorAll('#spl-r .swap-mini-back'));
-    const src = lCards[Math.max(0, Math.min(initiatorIndex, lCards.length - 1))];
-    const dst = rCards[Math.max(0, Math.min(targetIndex, rCards.length - 1))];
-    if (!src || !dst) return;
-
-    const sr = src.getBoundingClientRect();
-    const dr = dst.getBoundingClientRect();
-
-    // Highlight source cards
-    src.classList.add('swap-selected-source');
-    dst.classList.add('swap-selected-target');
-    src.style.outline = '2px solid var(--gold)';
-    dst.style.outline = '2px solid var(--gold)';
-
-    // Ghost cards at exact positions, cross over
-    const makeGhost = (r) => {
-      const g = document.createElement('div');
-      g.className = 'card-3d card-back card-ghost swap-fly-card';
-      g.style.cssText = [
-        `position:fixed`, `z-index:9998`, `pointer-events:none`,
-        `left:${r.left}px`, `top:${r.top}px`,
-        `width:${r.width}px`, `height:${r.height}px`,
-        `box-shadow:0 6px 18px rgba(0,0,0,.7)`
-      ].join(';');
-      document.body.appendChild(g);
-      return g;
-    };
-
-    const gl = makeGhost(sr);
-    const gr = makeGhost(dr);
-
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const DUR = '.85s cubic-bezier(.4,0,.2,1)';
-      gl.style.transition = `all ${DUR}`;
-      gl.style.left = dr.left + 'px';
-      gl.style.top  = dr.top  + 'px';
-
-      gr.style.transition = `all ${DUR}`;
-      gr.style.left = sr.left + 'px';
-      gr.style.top  = sr.top  + 'px';
-    }));
-
-    setTimeout(() => { gl.remove(); gr.remove(); }, 950);
-  }, 400);
-
-  // Progress bar
-  const prog = overlay.querySelector('#sp');
-  if (prog) {
-    prog.style.width = '100%';
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      prog.style.transition = 'width 3.5s linear';
-      prog.style.width = '0%';
-    }));
+function swapSourceRect(userId, visualIndex) {
+  if(String(userId)===String(S.userId)){
+    return Cards.rect($('my-hand')?.querySelectorAll('.card-3d')[visualIndex]);
   }
-
-  setTimeout(() => {
-    overlay.style.opacity = '0';
-    overlay.style.transition = 'opacity .4s';
-    setTimeout(() => overlay.remove(), 420);
-  }, 3500);
+  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+  return Cards.rect(seat?.querySelectorAll('.mini-card:not(.mini-incoming):not(.opp-drawn-card)')[visualIndex]) || Cards.rect(seat?.querySelector('.seat-cards'));
 }
+function swapTableRect() {
+  return Cards.rect(document.querySelector('.table-center')) || Cards.rect($('discard-pile')) || Cards.rect(document.querySelector('.poker-table'));
+}
+// ── Otto swap: slow, traceable face-down cards through table center ───────
+function showSwapAnimation(initiatorUserId, targetUserId, initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
+  SFX.play('Swapswoosh', 0.75);
+  showCenterCue('Scambio', `${initiatorName} ⇄ ${targetName}`);
+  const srcA=swapSourceRect(initiatorUserId, initiatorIndex);
+  const srcB=swapSourceRect(targetUserId, targetIndex);
+  const mid=swapTableRect();
+  if(!srcA||!srcB||!mid){ setTimeout(clearSwap8Mode, 1200); return; }
+
+  const involvedMe=String(initiatorUserId)===String(S.userId)||String(targetUserId)===String(S.userId);
+  const oldAnimHidden=S._animHidden;
+  const oldOppMotions=S._oppMotions?{...S._oppMotions}:null;
+  if(String(initiatorUserId)===String(S.userId)) S._animHidden=new Set([initiatorIndex]);
+  if(String(targetUserId)===String(S.userId)) S._animHidden=new Set([targetIndex]);
+  if(String(initiatorUserId)!==String(S.userId)) setOpponentMotion(initiatorUserId,{kind:'swap',sourceIndex:initiatorIndex,timeout:setTimeout(()=>{},1)});
+  if(String(targetUserId)!==String(S.userId)) setOpponentMotion(targetUserId,{kind:'swap',sourceIndex:targetIndex,timeout:setTimeout(()=>{},1)});
+  renderMyHand();renderSeats();
+
+  const layer=document.createElement('div');
+  layer.className='swap-field-layer';
+  document.body.appendChild(layer);
+  const makeGhost=(r,label)=>{
+    const g=document.createElement('div');
+    g.className='card-3d card-back swap-field-card';
+    g.setAttribute('aria-label', label);
+    Object.assign(g.style,{left:`${r.left}px`,top:`${r.top}px`,width:`${r.width}px`,height:`${r.height}px`});
+    layer.appendChild(g);
+    return g;
+  };
+  const a=makeGhost(srcA, initiatorName);
+  const b=makeGhost(srcB, targetName);
+  const center={left:mid.left+mid.width/2-srcA.width/2, top:mid.top+mid.height/2-srcA.height/2};
+  const centerB={left:mid.left+mid.width/2-srcB.width/2, top:mid.top+mid.height/2-srcB.height/2};
+  const endA={left:srcB.left+srcB.width/2-srcA.width/2, top:srcB.top+srcB.height/2-srcA.height/2};
+  const endB={left:srcA.left+srcA.width/2-srcB.width/2, top:srcA.top+srcA.height/2-srcB.height/2};
+  const move=(el,pos,rot=0,scale=1)=>{ el.style.left=`${pos.left}px`; el.style.top=`${pos.top}px`; el.style.transform=`rotate(${rot}deg) scale(${scale})`; };
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    a.style.transition='left 1400ms cubic-bezier(.2,.7,.2,1),top 1400ms cubic-bezier(.2,.7,.2,1),transform 1400ms';
+    b.style.transition=a.style.transition;
+    move(a,{left:center.left-18,top:center.top},-4,1.08);
+    move(b,{left:centerB.left+18,top:centerB.top},4,1.08);
+  }));
+  setTimeout(()=>{
+    a.classList.add('swap-paused'); b.classList.add('swap-paused');
+  },1450);
+  setTimeout(()=>{
+    a.classList.remove('swap-paused'); b.classList.remove('swap-paused');
+    a.style.transition='left 1600ms cubic-bezier(.32,.02,.22,1),top 1600ms cubic-bezier(.32,.02,.22,1),transform 1600ms';
+    b.style.transition=a.style.transition;
+    move(a,endA,5,1);
+    move(b,endB,-5,1);
+  },1900);
+  setTimeout(()=>{
+    layer.classList.add('leaving');
+    hideCenterCue();
+    S._animHidden=oldAnimHidden;
+    if(S._oppMotions){ Object.keys(S._oppMotions).forEach(id=>{ if(S._oppMotions[id]?.kind==='swap') delete S._oppMotions[id]; }); }
+    if(oldOppMotions) S._oppMotions={...(S._oppMotions||{}),...oldOppMotions};
+    if(!Object.keys(S._oppMotions||{}).length) S._oppMotions=null;
+    S._swap8Mode=null;
+    renderMyHand();renderSeats();renderActions();
+    setTimeout(()=>layer.remove(),360);
+  },3650);
+}
+
 
 socket.on('game:swap-reveal', ({
   initiatorUserId, initiatorUsername, targetUserId, targetUsername,
@@ -1801,7 +1768,8 @@ socket.on('game:swap-reveal', ({
   const tVisual = String(targetUserId) === String(S.userId)
     ? Math.max(0, (S.handOrder || []).indexOf(targetCardIndex))
     : targetCardIndex;
-  showSwapAnimation(initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
+  showSwapAnimation(initiatorUserId, targetUserId, initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
+  S._swap8Mode=null;
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
@@ -1932,6 +1900,7 @@ $('btn-back-lobby').addEventListener('click',()=>{
 
 socket.on('game:message',({text})=>{toast(text);addLog(text,'info');});
 socket.on('game:error',({message})=>{
+  S._forcedDiscardBusy=false;
   resetMotionState();
   renderMyHand();renderActions();renderTurnBanner();
   toast(message,'error');
@@ -1942,51 +1911,123 @@ const SFX = {
   _muted: localStorage.getItem('buio_muted') === '1',
   _last: Object.create(null),
   _loops: Object.create(null),
+  _buffers: Object.create(null),
+  _audioCtx: null,
+  _unlocked: false,
+  _manifest: ['Attacknotify','Swapswoosh','Youwintheleaderboard','Card','Cardshuffle','Success','Miniwin','Knock','Youlosetheleaderboard','9revealclick','Miniloss','Drumlooppostknock','Matchend','Fail'],
   get muted(){ return this._muted; },
 
-  play(name, vol=0.7, options={}){
+  init(){
+    this._ensureContext();
+    this._manifest.forEach(name=>this._load(name));
+    const unlock=()=>this.unlock();
+    ['pointerdown','touchstart','keydown','click'].forEach(ev=>window.addEventListener(ev,unlock,{once:true,passive:true}));
+  },
+  _ensureContext(){
+    if(this._audioCtx) return this._audioCtx;
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx) return null;
+    try{ this._audioCtx=new Ctx(); }catch(_){ this._audioCtx=null; }
+    return this._audioCtx;
+  },
+  async unlock(){
+    const ctx=this._ensureContext();
+    if(!ctx) return;
+    try{ if(ctx.state==='suspended') await ctx.resume(); }catch(_){}
+    this._unlocked=ctx.state==='running';
+    if(this._unlocked) this._manifest.forEach(name=>this._load(name));
+  },
+  async _load(name){
+    if(this._buffers[name]) return this._buffers[name];
+    const ctx=this._ensureContext();
+    if(!ctx) return null;
+    const promise=fetch(`/SFX/${name}.mp3`)
+      .then(r=>r.ok?r.arrayBuffer():Promise.reject(new Error(`SFX ${name}`)))
+      .then(buf=>ctx.decodeAudioData(buf.slice(0)))
+      .catch(()=>null);
+    this._buffers[name]=promise;
+    promise.then(buffer=>{ if(!buffer) delete this._buffers[name]; });
+    return promise;
+  },
+  async play(name, vol=0.7, options={}){
     if(this._muted) return null;
     const now=performance.now();
-    const cooldown=options.cooldown??160;
+    const cooldown=options.cooldown??120;
     if(now-(this._last[name]||0)<cooldown) return null;
     this._last[name]=now;
-    try{
-      const a = new Audio(`/SFX/${name}.mp3`);
-      a.volume = Math.min(1, Math.max(0, vol));
-      a.play().catch(()=>{});
-      return a;
-    } catch(e){ return null; }
-  },
-
-  loop(name, vol=0.7){
-    this.stop(name,0);
-    if(this._muted) return null;
+    const volume=Math.min(1,Math.max(0,vol));
+    const ctx=this._ensureContext();
+    if(ctx){
+      try{ if(ctx.state==='suspended') ctx.resume().catch(()=>{}); }catch(_){}
+      const buffer=await this._load(name);
+      if(buffer&&ctx.state==='running'){
+        const src=ctx.createBufferSource();
+        const gain=ctx.createGain();
+        gain.gain.value=volume;
+        src.buffer=buffer;
+        src.connect(gain).connect(ctx.destination);
+        src.start(0);
+        return src;
+      }
+    }
     try{
       const a=new Audio(`/SFX/${name}.mp3`);
-      a.loop=true;
-      a.volume=Math.min(1,Math.max(0,vol));
-      this._loops[name]=a;
+      a.preload='auto';
+      a.playsInline=true;
+      a.volume=volume;
       a.play().catch(()=>{});
       return a;
-    }catch(e){ return null; }
+    }catch(_){ return null; }
+  },
+
+  async loop(name, vol=0.7){
+    this.stop(name,0);
+    if(this._muted) return null;
+    const ctx=this._ensureContext();
+    const volume=Math.min(1,Math.max(0,vol));
+    if(ctx){
+      try{ if(ctx.state==='suspended') await ctx.resume(); }catch(_){}
+      const buffer=await this._load(name);
+      if(buffer&&ctx.state==='running'){
+        const src=ctx.createBufferSource();
+        const gain=ctx.createGain();
+        gain.gain.value=volume;
+        src.buffer=buffer; src.loop=true;
+        src.connect(gain).connect(ctx.destination);
+        src.start(0);
+        this._loops[name]={type:'web',src,gain};
+        return src;
+      }
+    }
+    try{
+      const a=new Audio(`/SFX/${name}.mp3`);
+      a.loop=true; a.preload='auto'; a.playsInline=true; a.volume=volume;
+      this._loops[name]={type:'html',audio:a};
+      a.play().catch(()=>{});
+      return a;
+    }catch(_){ return null; }
   },
 
   stop(name, fadeMs=250){
-    const a=this._loops[name];
-    if(!a) return;
+    const loop=this._loops[name];
+    if(!loop) return;
     delete this._loops[name];
-    if(!fadeMs){
-      a.pause();
-      a.currentTime=0;
-      return;
-    }
-    const start=a.volume;
+    const stopNow=()=>{
+      try{
+        if(loop.type==='web') loop.src.stop(0);
+        else { loop.audio.pause(); loop.audio.currentTime=0; }
+      }catch(_){}
+    };
+    if(!fadeMs){ stopNow(); return; }
     const started=performance.now();
+    const start=loop.type==='web'?loop.gain.gain.value:loop.audio.volume;
     const fade=now=>{
       const t=Math.min(1,(now-started)/fadeMs);
-      a.volume=Math.max(0,start*(1-t));
+      const v=Math.max(0,start*(1-t));
+      if(loop.type==='web') loop.gain.gain.value=v;
+      else loop.audio.volume=v;
       if(t<1) requestAnimationFrame(fade);
-      else { a.pause();a.currentTime=0; }
+      else stopNow();
     };
     requestAnimationFrame(fade);
   },
@@ -1994,12 +2035,14 @@ const SFX = {
   toggle(){
     this._muted = !this._muted;
     if(this._muted) Object.keys(this._loops).forEach(name=>this.stop(name,0));
+    else this.unlock();
     localStorage.setItem('buio_muted', this._muted ? '1' : '0');
     const btn = $('mute-btn');
     if(btn) btn.textContent = this._muted ? '🔇' : '🔊';
     return this._muted;
   }
 };
+SFX.init();
 
 // ── Opponent animation helpers ────────────────────────────────────────────
 
@@ -2312,7 +2355,7 @@ window.buioTest = {
     return run;
   },
   // Show swap UI test
-  testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
+  testSwap(){ showSwapAnimation(S.userId, S.gameState?.players.find(p=>String(p.userId)!==String(S.userId))?.userId, 'Mario','Luigi',4,4,0,3); },
   testPenalty(userId=S.userId){
     const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
     animateAttackPenaltyDraw({userId,targetCardCount:(player?.cardCount||4)+1});
