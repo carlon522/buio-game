@@ -58,6 +58,7 @@
     const g=document.createElement('div');
     g.className=`${faceUp(card)?'card-3d card-front':'card-3d card-back'} card-ghost ${opts.className||''}`.trim();
     g.innerHTML=ghostHTML(card);
+    if(faceUp(card)&&typeof _decodedCardImages!=='undefined'&&_decodedCardImages.has(`/cards/${card.suit}_${card.value}.jpg`)) g.classList.add('image-ready');
     Object.assign(g.style,{
       position:'fixed',left:`${from.left}px`,top:`${from.top}px`,width:`${from.width}px`,height:`${from.height}px`,
       margin:'0',zIndex:String(opts.z||9990),pointerEvents:'none',boxSizing:'border-box',
@@ -98,15 +99,16 @@
         g.style.opacity=String(lerp(1,opts.endOpacity??1,easeOut(clamp(fadeT,0,1))));
         if(raw<1){requestAnimationFrame(frame);return;}
         g.style.transform=`translate3d(${end.left-from.left}px,${end.top-from.top}px,0) scale(${end.width/Math.max(1,from.width)},${end.height/Math.max(1,from.height)}) rotate(0deg)`;
-        opts.onDone?.(g);
-        resolve(g);
+        const finish=()=>{opts.onDone?.(g);resolve(g);};
+        const hold=opts.landingHoldMs??0;
+        if(hold>0) setTimeout(finish,hold); else finish();
       };
       requestAnimationFrame(()=>requestAnimationFrame(frame));
     });
   }
 
-  const removeOnDone=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
-  const landOnPile=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
+  const removeOnDone=(done,removeDelay=90)=>g=>{Promise.resolve(done?.()).finally(()=>setTimeout(()=>g?.remove(),removeDelay));};
+  const landOnPile=(done,removeDelay=90)=>g=>{Promise.resolve(done?.()).finally(()=>setTimeout(()=>g?.remove(),removeDelay));};
 
   Object.assign(Cards,{
     drawFromDeck(onDone){return fly({from:Cards.rect(document.getElementById('deck-pile')),to:Cards.drawnCardRect()||Cards.rect(document.getElementById('drawn-slot')),duration:D.draw,arc:24,spin:2,face:'down',z:9995,onDone:removeOnDone(onDone)});},
@@ -115,10 +117,10 @@
     discardDrawnCard(opts){return fly({from:opts.drawnSlotRect,to:opts.pileRect,card:opts.card,duration:D.discard,arc:-50,spin:-4,z:9999,onDone:landOnPile(opts.onLand)});},
     discardHandCard(opts){
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.discard,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});
-      return fly({from:opts.drawnSlotRect,to:opts.appendSlotRect,card:opts.drawnCard,face:opts.drawnFace||'auto',duration:D.keep,arc:-18,spin:2,z:9998,onDone:removeOnDone(opts.onHandLand)});
+      return fly({from:opts.drawnSlotRect,to:opts.appendSlotRect,card:opts.drawnCard,face:opts.drawnFace||'auto',duration:D.keep,arc:0,spin:0,linear:true,landingHoldMs:120,z:9998,onDone:removeOnDone(opts.onHandLand,180)});
     },
     discardHandToPile(handSlotRect,pileRect,card,onLand){return fly({from:handSlotRect,to:pileRect,card,duration:D.discard,arc:-52,spin:-4,z:9999,onDone:landOnPile(onLand)});},
-    keepDrawnToHand(drawnSlotRect,appendSlotRect,card,onLand){return fly({from:drawnSlotRect,to:appendSlotRect,card,duration:D.keep,arc:-18,spin:2,z:9998,onDone:removeOnDone(onLand)});},
+    keepDrawnToHand(drawnSlotRect,appendSlotRect,card,onLand){return fly({from:drawnSlotRect,to:appendSlotRect,card,duration:D.keep,arc:0,spin:0,linear:true,landingHoldMs:120,z:9998,onDone:removeOnDone(onLand,180)});},
     forcedReplacement(deckRect,appendSlotRect,onLand){return fly({from:deckRect,to:appendSlotRect,face:'down',duration:D.keep,arc:-20,spin:2,z:9998,onDone:removeOnDone(onLand)});},
     forcedDiscard(opts){
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.forced,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});

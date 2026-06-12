@@ -927,14 +927,21 @@ function syncCardFace(el, card, faceUp) {
   const signature=faceUp&&card?.suit
     ? `front:${card.id||''}:${card.suit}:${card.value}`
     : 'back';
+  const oldSignature=el.dataset.faceSignature||'';
+  const oldFace=oldSignature.startsWith('front:')?'front':oldSignature==='back'?'back':'';
+  const newFace=faceUp&&card?.suit?'front':'back';
+  const faceChanged=Boolean(oldFace&&oldFace!==newFace);
   el.classList.toggle('card-front',faceUp);
   el.classList.toggle('card-back',!faceUp);
   el.classList.toggle('is-special',Boolean(faceUp&&card?.isSpecial));
-  if(el.dataset.faceSignature===signature) return;
+  if(oldSignature===signature) return;
   el.dataset.faceSignature=signature;
   el.innerHTML='';
   el.classList.remove('image-ready','image-error');
-  if(!faceUp||!card?.suit) return;
+  if(!faceUp||!card?.suit){
+    if(faceChanged) restartCardFlip(el);
+    return;
+  }
 
   const src=cardImageURL(card);
   const img=document.createElement('img');
@@ -946,7 +953,14 @@ function syncCardFace(el, card, faceUp) {
   img.addEventListener('load',()=>cardImageLoaded(img),{once:true});
   img.addEventListener('error',()=>cardImageFailed(img,card.label,card.symbol,card.color==='red'?'red':'black'),{once:true});
   el.appendChild(img);
-  if(_decodedCardImages.has(src)) requestAnimationFrame(()=>el.classList.add('image-ready'));
+  if(_decodedCardImages.has(src)) el.classList.add('image-ready');
+  if(faceChanged) restartCardFlip(el);
+}
+
+function restartCardFlip(el) {
+  el.classList.remove('card-turn-in');
+  void el.offsetWidth;
+  el.classList.add('card-turn-in');
 }
 
 function bindHandCard(el) {
@@ -1176,7 +1190,7 @@ function onHandClick(visualIdx) {
       },
       onShiftStart:({appendVI,keptServerIdx})=>{
         const appendSlotRect=Cards.rect($('my-hand').querySelectorAll('.card-3d')[appendVI]);
-        Cards.keepDrawnToHand(drawnSlotRect,appendSlotRect,drawnCard,()=>{
+        const revealKept=()=>{
           clearTimeout(S._keptRevealTimer);
           S._keptRevealServerIdx=keptServerIdx;
           S._animHidden=null;renderMyHand();renderScore();SFX.play('Card',0.18);
@@ -1184,7 +1198,9 @@ function onHandClick(visualIdx) {
             S._keptRevealServerIdx=null;
             renderMyHand();
           },4000);
-        });
+        };
+        const ready=drawnCard?primeCardImage(drawnCard):Promise.resolve();
+        Cards.keepDrawnToHand(drawnSlotRect,appendSlotRect,drawnCard,()=>ready.finally(revealKept));
       },
       onDone:()=>{
         clearTimeout(S._keptRevealTimer);
