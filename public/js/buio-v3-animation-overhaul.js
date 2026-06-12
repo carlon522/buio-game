@@ -48,8 +48,8 @@
   }
 
   function targetTopLeft(from,to,opts={}){
-    const w=opts.toW||from.width||rootSize('w');
-    const h=opts.toH||from.height||rootSize('h');
+    const w=opts.toW||to.width||from.width||rootSize('w');
+    const h=opts.toH||to.height||from.height||rootSize('h');
     return {left:to.left+to.width/2-w/2,top:to.top+to.height/2-h/2,width:w,height:h};
   }
 
@@ -105,7 +105,7 @@
     });
   }
 
-  const removeOnDone=done=>g=>{g?.remove();done?.();};
+  const removeOnDone=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
   const landOnPile=done=>g=>{done?.();requestAnimationFrame(()=>requestAnimationFrame(()=>g?.remove()));};
 
   Object.assign(Cards,{

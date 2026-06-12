@@ -137,19 +137,26 @@ function cardImageFailed(img,label,sym,color) {
   img.parentElement?.classList.add('image-error');
   makeFB(img.parentElement,label,sym,color);
 }
+function primeCardImage(card) {
+  if(!card?.suit||!card?.value) return Promise.resolve();
+  const src=cardImageURL(card);
+  if(_decodedCardImages.has(src)) return Promise.resolve();
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.decoding='async';
+    img.loading='eager';
+    const mark=()=>{ _decodedCardImages.add(src); resolve(); };
+    img.onload=()=>{
+      if(typeof img.decode==='function') img.decode().then(mark).catch(mark);
+      else mark();
+    };
+    img.onerror=resolve;
+    img.src=src;
+  });
+}
 function preloadCardImages() {
   ['denari','coppe','spade','bastoni'].forEach(suit => {
-    for(let value=1;value<=10;value++){
-      const img=new Image();
-      img.decoding='async';
-      const src=`/cards/${suit}_${value}.jpg`;
-      img.onload=()=>{
-        const mark=()=>_decodedCardImages.add(src);
-        if(typeof img.decode==='function') img.decode().then(mark).catch(mark);
-        else mark();
-      };
-      img.src=src;
-    }
+    for(let value=1;value<=10;value++) primeCardImage({suit,value});
   });
 }
 window.cardImageLoaded=cardImageLoaded;
@@ -748,18 +755,7 @@ function runDealAnimation(cb) {
 }
 
 // ── Peek — cards flip face-up IN THE HAND (no popup) ─────────────────────
-function showPeekOverlay({cards,duration}){
-  // Called after deal animation completes
-  S.peekCards = cards;
-  S._peekDuration = duration;
-  S._peekRevealed = new Set([0, 1]); // first two visual positions flip up
-
-  renderMyHand(); // renders cards 0,1 as face-up (they have actual card data in privateState)
-  requestAnimationFrame(() => {
-    $('my-hand')?.querySelectorAll('.card-front').forEach(card => card.classList.add('card-turn-in'));
-  });
-
-  // Inline countdown bar in my-area
+function startPeekCountdown(duration) {
   show($('peek-inline'));
   $('btn-ready').disabled=false;$('btn-ready').textContent=_lang==='en'?'I memorised them':'Ho memorizzato';
   const prog=$('peek-prog-inline');
@@ -771,8 +767,29 @@ function showPeekOverlay({cards,duration}){
   S.peekCountdown=setInterval(()=>{secs--;$('peek-secs-inline').textContent=Math.max(0,secs);if(secs<=0)clearInterval(S.peekCountdown);},1000);
 }
 
+function showPeekOverlay({cards,duration}){
+  // Called after deal animation completes. Decode the look-card images before
+  // flipping them so iOS/Safari never paints a blank white card face first.
+  S.peekCards = cards;
+  S._peekDuration = duration;
+  S._peekRevealed = new Set();
+  renderMyHand();
+  const revealToken=Symbol('peek-reveal');
+  S._peekRevealToken=revealToken;
+  Promise.allSettled([cards?.[0],cards?.[1]].filter(Boolean).map(primeCardImage)).finally(()=>{
+    if(S._peekRevealToken!==revealToken||S._peekServerEnded) return;
+    S._peekRevealed = new Set([0, 1]); // first two visual positions flip up
+    renderMyHand();
+    requestAnimationFrame(() => {
+      $('my-hand')?.querySelectorAll('.card-front').forEach(card => card.classList.add('card-turn-in'));
+    });
+    startPeekCountdown(duration);
+  });
+}
+
 function closePeekInline(){
   clearInterval(S.peekCountdown);
+  S._peekRevealToken=null;
   S._peekRevealed=null; // clears peek state; renderMyHand will show all cards face-down
   hide($('peek-inline'));
   // renderMyHand() is called by game:peek-ended → renderBoard() right after,
@@ -920,14 +937,16 @@ function syncCardFace(el, card, faceUp) {
   if(!faceUp||!card?.suit) return;
 
   const src=cardImageURL(card);
-  if(_decodedCardImages.has(src)) el.classList.add('image-ready');
   const img=document.createElement('img');
+  img.decoding='async';
+  img.loading='eager';
   img.src=src;
   img.className='card-img';
   img.alt=card.label||String(card.value);
   img.addEventListener('load',()=>cardImageLoaded(img),{once:true});
   img.addEventListener('error',()=>cardImageFailed(img,card.label,card.symbol,card.color==='red'?'red':'black'),{once:true});
   el.appendChild(img);
+  if(_decodedCardImages.has(src)) requestAnimationFrame(()=>el.classList.add('image-ready'));
 }
 
 function bindHandCard(el) {
@@ -1161,7 +1180,6 @@ function onHandClick(visualIdx) {
           clearTimeout(S._keptRevealTimer);
           S._keptRevealServerIdx=keptServerIdx;
           S._animHidden=null;renderMyHand();renderScore();SFX.play('Card',0.18);
-          $('my-hand')?.querySelectorAll('.card-3d')[appendVI]?.classList.add('card-turn-in');
           S._keptRevealTimer=setTimeout(()=>{
             S._keptRevealServerIdx=null;
             renderMyHand();

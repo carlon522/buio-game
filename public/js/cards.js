@@ -91,8 +91,8 @@ const Cards = (() => {
   function lerp(a, b, t) { return a + (b - a) * t; }
 
   function targetTopLeft(from, to, opts) {
-    const w = opts.toW || from.width || cw();
-    const h = opts.toH || from.height || ch();
+    const w = opts.toW || to.width || from.width || cw();
+    const h = opts.toH || to.height || from.height || ch();
     return {
       left: to.left + to.width / 2 - w / 2,
       top: to.top + to.height / 2 - h / 2,
@@ -147,8 +147,8 @@ const Cards = (() => {
 
   function removeOnDone(done) {
     return g => {
-      g?.remove();
       done?.();
+      requestAnimationFrame(() => requestAnimationFrame(() => g?.remove()));
     };
   }
 
