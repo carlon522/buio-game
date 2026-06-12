@@ -56,12 +56,30 @@ function showScreen(n) {
 }
 
 async function hydrateAppVersion() {
+  if ($('app-version')) $('app-version').textContent = 'v2.0.0';
   try {
     const res = await fetch('/api/version');
     if (!res.ok) return;
     const data = await res.json();
     if (data?.version) $('app-version').textContent = `v${data.version}`;
   } catch (_) {}
+}
+
+function loadMotionExtensions() {
+  if (!document.querySelector('link[data-buio-motion="v2"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/css/buio-v2-motion.css?v=2';
+    link.dataset.buioMotion = 'v2';
+    document.head.appendChild(link);
+  }
+  if (!document.querySelector('script[data-buio-motion="v2"]')) {
+    const script = document.createElement('script');
+    script.src = '/js/buio-v2-motion.js?v=2';
+    script.async = false;
+    script.dataset.buioMotion = 'v2';
+    document.body.appendChild(script);
+  }
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -2623,6 +2641,7 @@ $('lobby-lang-toggle').addEventListener('click',setLanguageToggle);
   S._selIdx=-1;
   preloadCardImages();
   hydrateAppVersion();
+  loadMotionExtensions();
   applyLang(); // apply saved language on load
   // Set mute button icon from saved preference
   const btn=$('mute-btn');
