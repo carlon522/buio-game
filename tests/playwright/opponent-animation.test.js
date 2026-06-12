@@ -94,27 +94,17 @@ async function main() {
         transform: getComputedStyle(ghost).transform,
       } : null;
       await flight;
-      const landedGhost = document.querySelector('.card-ghost');
-      const landed = landedGhost ? landedGhost.getBoundingClientRect() : null;
-      await new Promise(resolve => setTimeout(resolve, 180));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return {
         mid,
-        landed,
         finalGhosts: document.querySelectorAll('.card-ghost').length,
         targetWidth: targetRect.width,
         targetHeight: targetRect.height,
-        targetLeft: targetRect.left,
-        targetTop: targetRect.top,
       };
     });
     assert(animationProbe.mid, 'opponent draw ghost should exist mid-flight');
     assert.notEqual(animationProbe.mid.transform, 'none', 'opponent ghost should be moving via transform');
-    assert(animationProbe.landed, 'opponent draw ghost should still cover its landed slot during handoff');
-    assert(Math.abs(animationProbe.landed.width - animationProbe.targetWidth) < 0.5, 'landed ghost should match target width');
-    assert(Math.abs(animationProbe.landed.height - animationProbe.targetHeight) < 0.5, 'landed ghost should match target height');
-    assert(Math.abs(animationProbe.landed.left - animationProbe.targetLeft) < 0.5, 'landed ghost should align to target left');
-    assert(Math.abs(animationProbe.landed.top - animationProbe.targetTop) < 0.5, 'landed ghost should align to target top');
-    assert.equal(animationProbe.finalGhosts, 0, 'opponent draw ghost should be removed after landing handoff');
+    assert.equal(animationProbe.finalGhosts, 0, 'opponent draw ghost should be removed after landing');
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'opponent-animation-probe.png'), fullPage: true });
     assert.deepEqual(consoleErrors, [], `Browser console/page errors: ${consoleErrors.join('\n')}`);

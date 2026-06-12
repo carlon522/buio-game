@@ -126,9 +126,9 @@
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.forced,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});
       return fly({from:opts.deckRect,to:opts.appendSlotRect||opts.targetSlotRect,card:opts.drawCard,face:opts.drawFace||'down',duration:D.keep,arc:-20,spin:2,z:9998,onDone:removeOnDone(opts.onDeckLand)});
     },
-    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:0,spin:0,linear:true,landingHoldMs:100,z:9990,onDone:removeOnDone(onLand,140)});},
-    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:0,spin:0,linear:true,landingHoldMs:80,z:9995,onDone:landOnPile(onLand,120)});},
-    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:0,spin:0,linear:true,landingHoldMs:100,z:9994,onDone:removeOnDone(onLand,140)});},
+    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:0,spin:0,linear:true,z:9990,onDone:removeOnDone(onLand)});},
+    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:0,spin:0,linear:true,z:9995,onDone:landOnPile(onLand)});},
+    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:0,spin:0,linear:true,z:9994,onDone:removeOnDone(onLand)});},
     swap(rectA,rectB,onDone){
       let done=0;const oneDone=()=>{if(++done===2)onDone?.();};
       const a=fly({from:rectA,to:rectB,face:'down',duration:D.swap,arc:-58,spin:3,z:9992,onDone:removeOnDone(oneDone)});
