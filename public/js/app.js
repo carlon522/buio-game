@@ -15,7 +15,7 @@ const S = {
   _animHidden:null,         // Set of visual slots hidden while ghosts travel
   _skipDiscard:false,       // true while a card is flying TO the discard pile
   _pendingDiscardCard:null, // card to show in pile once animation completes
-  _attackRevealActive:false,// true during the 5s attack reveal overlay — ALL actions paused
+  _attackRevealActive:false,// true during the field attack sequence — ALL actions paused
   _attackAnnouncer:null,    // userId of player currently in announce phase (blocks others' ⚔ button)
   _peekRevealed:null,       // Set of visual indices currently flipped face-up for peek
   _peekDuration:0,          // ms of peek timer
@@ -34,6 +34,8 @@ const S = {
   _handCompacting:false,
   _pendingPrivateState:null,
   _pendingAttackRemoval:null,
+  _attackFieldMotion:null,
+  _attackFieldTimers:null,
   _removalGap:null,
   _turnReadyTimer:null,
 };
@@ -199,9 +201,152 @@ function resetMotionState() {
   S._animHidden=null;
   if(S._oppMotions) Object.values(S._oppMotions).forEach(m=>clearTimeout(m.timeout));
   S._oppMotions=null;
+  clearAttackFieldTimers();
+  document.querySelector('.attack-field-layer')?.remove();
+  S._attackFieldMotion=null;
+  S._pendingAttackRemoval=null;
+  S._removalGap=null;
   S._attackMode=false;
   S._attackAnnouncer=null;
   $('discard-pile')?.classList.remove('atk-target');
+}
+
+function clearAttackFieldTimers() {
+  (S._attackFieldTimers||[]).forEach(clearTimeout);
+  S._attackFieldTimers=[];
+}
+
+function attackFieldDelay(ms) {
+  return new Promise(resolve=>{
+    const timer=setTimeout(resolve,ms);
+    S._attackFieldTimers=S._attackFieldTimers||[];
+    S._attackFieldTimers.push(timer);
+  });
+}
+
+function attackFieldSource(attackerUserId,cardIndex) {
+  if(String(attackerUserId)===String(S.userId)){
+    const pending=S._pendingAttackRemoval;
+    const visualIdx=pending?.serverIdx===cardIndex
+      ? pending.visualIdx
+      : Math.max(0,(S.handOrder||[]).indexOf(cardIndex));
+    const element=[...$('my-hand')?.querySelectorAll('.card-3d')||[]][visualIdx];
+    return {visualIdx,serverIdx:cardIndex,element,rect:Cards.rect(element),isMe:true};
+  }
+  const seat=document.querySelector(`.seat[data-user-id="${attackerUserId}"]`);
+  const source=opponentHandSource(seat,cardIndex);
+  return {visualIdx:source.index,serverIdx:cardIndex,element:source.element,rect:source.rect,isMe:false,seat};
+}
+
+function attackFieldTargetRect() {
+  const pile=Cards.rect($('discard-pile'));
+  const table=Cards.rect($('poker-table'));
+  if(!pile) return null;
+  const width=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cw'))||68;
+  const height=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ch'))||104;
+  const edge=table||{left:8,right:innerWidth-8,top:8,bottom:innerHeight-8};
+  const gap=Math.max(12,Math.round(width*.24));
+  let left=pile.right+gap;
+  let top=pile.top;
+  if(left+width>edge.right-10) left=pile.left-width-gap;
+  if(left<edge.left+10){
+    left=pile.left;
+    top=Math.max(edge.top+10,pile.top-height-gap);
+  }
+  return {left,top,width,height,right:left+width,bottom:top+height};
+}
+
+function createAttackFieldCard(sourceRect,card,attackerName) {
+  const layer=document.createElement('div');
+  layer.className='attack-field-layer';
+  layer.setAttribute('aria-live','polite');
+  layer.innerHTML=`
+    <div class="attack-field-card" aria-label="${esc(attackerName)}">
+      <div class="attack-field-inner">
+        <div class="attack-field-side attack-field-back">
+          <div class="card-3d card-back"></div>
+        </div>
+        <div class="attack-field-side attack-field-front">
+          ${cardHTML({...card,known:true})}
+        </div>
+      </div>
+    </div>
+    <div class="attack-field-status" role="status"></div>`;
+  document.body.appendChild(layer);
+  const shell=layer.querySelector('.attack-field-card');
+  Object.assign(shell.style,{
+    left:`${sourceRect.left}px`,
+    top:`${sourceRect.top}px`,
+    width:`${sourceRect.width}px`,
+    height:`${sourceRect.height}px`,
+  });
+  return {layer,shell,status:layer.querySelector('.attack-field-status')};
+}
+
+function waitForAttackCardImage(shell) {
+  const image=shell?.querySelector('.attack-field-front img');
+  if(!image||image.complete) return image?.decode?.().catch(()=>{})||Promise.resolve();
+  return new Promise(resolve=>{
+    image.addEventListener('load',()=>image.decode?.().catch(()=>{}).finally(resolve)||resolve(),{once:true});
+    image.addEventListener('error',resolve,{once:true});
+  });
+}
+
+function moveAttackFieldCard(shell,to,duration=900,arc=-50) {
+  return new Promise(resolve=>{
+    const from=shell.getBoundingClientRect();
+    const started=performance.now();
+    const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+    const lerp=(a,b,t)=>a+(b-a)*t;
+    function frame(now){
+      const raw=Math.min(1,(now-started)/duration);
+      const t=ease(raw);
+      const lift=Math.sin(Math.PI*raw)*arc;
+      shell.style.left=`${lerp(from.left,to.left,t)}px`;
+      shell.style.top=`${lerp(from.top,to.top,t)+lift}px`;
+      shell.style.width=`${lerp(from.width,to.width,t)}px`;
+      shell.style.height=`${lerp(from.height,to.height,t)}px`;
+      shell.style.transform=`rotate(${Math.sin(Math.PI*raw)*-5}deg)`;
+      if(raw<1) requestAnimationFrame(frame);
+      else{
+        shell.style.transform='';
+        resolve();
+      }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+async function flipAttackFieldCard(shell,faceUp) {
+  if(faceUp) await waitForAttackCardImage(shell);
+  shell.classList.toggle('face-up',faceUp);
+  await attackFieldDelay(720);
+}
+
+function positionAttackFieldStatus(status,target) {
+  const width=Math.min(190,Math.max(120,target.width*2.2));
+  let top=target.bottom+10;
+  if(top+42>innerHeight-8) top=target.top-50;
+  Object.assign(status.style,{
+    width:`${width}px`,
+    left:`${Math.max(8,Math.min(innerWidth-width-8,target.left+target.width/2-width/2))}px`,
+    top:`${top}px`,
+  });
+}
+
+function clearAttackFieldVisuals() {
+  clearAttackFieldTimers();
+  document.querySelector('.attack-field-layer')?.remove();
+  S._attackFieldMotion=null;
+  S._pendingAttackRemoval=null;
+  S._animHidden=null;
+  S._removalGap=null;
+  S._selIdx=-1;
+  S._attackMode=false;
+  renderMyHand();
+  renderSeats();
+  renderActions();
+  renderTurnBanner();
 }
 
 function knownHandCardAtVisual(visualIdx) {
@@ -301,10 +446,12 @@ function animateOpponentHandRemoval(userId,removedIndex,gapMs=420,duration=900) 
   const oldCards=[...seat?.querySelectorAll('.mini-card:not(.opp-drawn-card)')||[]];
   if(!seat||!oldCards.length) return;
   const before=oldCards.map(card=>card.getBoundingClientRect());
-  oldCards[Math.min(removedIndex,oldCards.length-1)]?.classList.add('motion-hidden');
+  const fieldGap=String(S._attackFieldMotion?.attackerUserId)===String(userId);
+  if(!fieldGap) oldCards[Math.min(removedIndex,oldCards.length-1)]?.classList.add('motion-hidden');
   setTimeout(()=>{
     const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
     if(!player||player.cardCount<1) return;
+    if(fieldGap) S._attackFieldMotion=null;
     player.cardCount-=1;
     renderSeats();
     const nextSeat=document.querySelector(`.seat[data-user-id="${userId}"]`);
@@ -518,13 +665,14 @@ socket.on('game:starting',()=>{
   hide($('panel-waiting'));hide($('panel-scoring'));hide($('panel-gameover'));hide($('panel-count-cards'));
   clearTimeout(S._keptRevealTimer);
   S.drawnCard=null;S.privateState=null;S._attackMode=false;S.handOrder=null;S.cardRaise=null;S._animSlot=null;S._skipDiscard=false;S._pendingDiscardCard=null;S._attackRevealActive=false;S._peekRevealed=null;S._nove9Mode=false;S._tempRevealServerIdx=null;S._keptRevealServerIdx=null;S._attackAnnouncer=null;
-  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;S._penaltyAnimating=false;S._roundEndBusy=false;S._handCompacting=false;S._pendingPrivateState=null;S._pendingAttackRemoval=null;S._removalGap=null;
+  S._animHidden=null;S._oppDrawn=null;S._oppMotions=null;S._penaltyAnimating=false;S._roundEndBusy=false;S._handCompacting=false;S._pendingPrivateState=null;S._pendingAttackRemoval=null;S._attackFieldMotion=null;S._removalGap=null;
   S.gameLog=[];S._selIdx=-1;
   SFX.play('Cardshuffle',0.7);
   hide($('attack-window'));hide($('attack-announce-bar'));
   hide($('drawn-slot'));hide($('panel-special'));
   clearInterval(S._atkCdInt);
-  document.querySelector('.atk-reveal-overlay')?.remove();
+  clearAttackFieldTimers();
+  document.querySelector('.attack-field-layer')?.remove();
   renderLog();
 });
 
@@ -697,12 +845,14 @@ function renderSeats() {
     const motion=getOpponentMotion(player.userId);
     const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>{
       const incoming=drawing&&i===a.length-1;
-      const gap=motion?.stage==='gap'&&motion.sourceIndex===i;
+      const attackGap=String(S._attackFieldMotion?.attackerUserId)===String(player.userId)&&
+        S._attackFieldMotion?.sourceIndex===i;
+      const gap=attackGap||(motion?.stage==='gap'&&motion.sourceIndex===i);
       const hidden=motion?.reconciled
         ? motion.targetIndex===i && ['keep','forced'].includes(motion.kind)
         : motion?.sourceIndex===i && motion.kind!=='discard-drawn';
       const dealHidden=_dealBusy&&!S._dealLanded?.has(`${player.userId}:${i}`);
-      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden&&!gap?' motion-hidden':''}${gap?' mini-gap':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
+      return `<div class="mini-card${incoming?' mini-incoming':''}${hidden&&!gap?' motion-hidden':''}${gap?' mini-gap':''}${attackGap?' attack-source-gap':''}${dealHidden?' deal-hidden':''}" data-card-index="${i}"></div>`;
     }).join('');
     const drawnMini=drawn?`<div class="mini-card opp-drawn-card${drawn==='incoming'?' mini-incoming':''}${motion?.hideDrawn?' motion-hidden':''}"></div>`:'';
     const current=player.isCurrentPlayer&&!player.isEliminated;
@@ -807,11 +957,14 @@ function renderMyHand() {
     existing.delete(key);
     bindHandCard(el);
 
+    const attackGap=String(S._attackFieldMotion?.attackerUserId)===String(S.userId)&&
+      S._attackFieldMotion?.sourceIndex===visualIdx;
     const classes=['card-3d'];
-    if(inDiscard||inForcedDiscard||S._nove9Mode) classes.push('clickable');
-    if(S._attackMode) classes.push('atk-tgt');
+    if((inDiscard||inForcedDiscard||S._nove9Mode)&&!attackGap&&!S._attackRevealActive) classes.push('clickable');
+    if(S._attackMode&&!attackGap) classes.push('atk-tgt');
     if(visualIdx===S._selIdx) classes.push('selected');
     if(visualIdx===S._removalGap) classes.push('removal-gap');
+    if(attackGap) classes.push('attack-source-gap');
     if(el.classList.contains('card-turn-in')) classes.push('card-turn-in');
     if(el.classList.contains('image-ready')) classes.push('image-ready');
     if(el.classList.contains('image-error')) classes.push('image-error');
@@ -820,14 +973,22 @@ function renderMyHand() {
     el.dataset.serverIndex=String(serverIdx);
     el.dataset.visualIndex=String(visualIdx);
     el.dataset.index=String(visualIdx);
+    if(attackGap) el.dataset.gapLabel=t('attack_gap');
+    else delete el.dataset.gapLabel;
+    el.style.pointerEvents='';
+    if(!S._handCompacting){
+      el.style.boxShadow='';
+      el.style.transform='';
+      el.style.transition='';
+    }
 
     const raise=S.cardRaise?.[visualIdx]||0;
     if(raise>0) el.dataset.raise=String(raise);
     else delete el.dataset.raise;
     const dealHidden=_dealBusy&&!S._dealLanded?.has(`${S.userId}:${serverIdx}`);
-    const hidden=S._animSlot===visualIdx||
+    const hidden=!attackGap&&(S._animSlot===visualIdx||
       (S._animHidden?.has(visualIdx)&&visualIdx!==S._removalGap)||
-      dealHidden;
+      dealHidden);
     el.style.visibility=hidden?'hidden':'';
 
     const isPeekUp=S._peekRevealed?.has(visualIdx);
@@ -852,10 +1013,16 @@ function renderMyHand() {
       drawn.dataset.cardKey=key;
       drawn.dataset.index='-1';
       drawn.addEventListener('click',()=>{
-        if(S.gameState?.phase==='discard'&&S.gameState.currentPlayerUserId===S.userId&&!S._attackMode) discardDrawn();
+        if(!S._attackRevealActive&&S.gameState?.phase==='discard'&&S.gameState.currentPlayerUserId===S.userId&&!S._attackMode) discardDrawn();
       });
       display.replaceChildren(drawn);
     }
+    drawn.classList.toggle('clickable',Boolean(
+      !S._attackRevealActive&&
+      S.gameState?.phase==='discard'&&
+      S.gameState.currentPlayerUserId===S.userId&&
+      !S._attackMode
+    ));
     syncCardFace(drawn,S.drawnCard,Boolean(S.drawnCard.known&&S.drawnCard.suit));
   } else hide(slot);
 
@@ -1004,28 +1171,17 @@ function onHandClick(visualIdx) {
   }
 
   if(S._attackMode){
-    S._pendingAttackRemoval={visualIdx,serverIdx};
-    if(cardEl){
-      // Capture rect NOW before any re-render can detach cardEl
-      const slotR = cardEl.getBoundingClientRect();
-      const pileR = Cards.rect($('discard-pile'));
-      // Brief gold ring lift, then immediately fly
-      cardEl.style.pointerEvents='none';
-      cardEl.style.transition='transform .18s cubic-bezier(.34,1.2,.64,1),box-shadow .18s';
-      cardEl.style.transform='translateY(-12px) scale(1.06)';
-      cardEl.style.boxShadow='0 0 0 3px var(--gold),0 10px 24px rgba(0,0,0,.65)';
-      // Block pile render immediately so game:card-discarded can't update
-      // the pile before the attack ghost arrives
-      S._skipDiscard=true;
-      setTimeout(()=>{
-        S._animHidden=new Set([visualIdx]);
-        renderMyHand();
-        Cards.attackCard(slotR, pileR, ()=>settleDiscardPile(), knownHandCardAtVisual(visualIdx));
-      },200);
-    }
+    S._pendingAttackRemoval={
+      visualIdx,
+      serverIdx,
+      sourceRect:Cards.rect(cardEl),
+      cardKey:cardEl?.dataset.cardKey||null,
+    };
+    S._attackMode=false;
+    S._selIdx=-1;
+    renderMyHand();
     $('discard-pile')?.classList.remove('atk-target');
     socket.emit('game:attack',{cardIndex:serverIdx});
-    S._selIdx=-1;   // never show selection border on attack
     return;
   }
 
@@ -1089,7 +1245,7 @@ function animateCardSwap(fromVI, toVI) {
 }
 
 function discardDrawn() {
-  if(turnHandoffActive()) return;
+  if(turnHandoffActive()||S._attackRevealActive) return;
   SFX.play('Card', 0.5);
   // Capture rects BEFORE hiding the slot (hidden elements have zero rect)
   const drawnSlotRect = Cards.drawnCardRect(); // rect of the card-3d inside drawn-slot
@@ -1367,54 +1523,29 @@ socket.on('game:card-discarded',({card, discarderId, handIndex, forced})=>{
   renderActions();
 });
 
-// ── Attack reveal ─────────────────────────────────────────────────────────
-socket.on('game:attack-reveal',({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard,cardIndex})=>{
+// ── Attack reveal on the table ────────────────────────────────────────────
+socket.on('game:attack-reveal',async({attackerUserId,attackerUsername,card,discardCard,success,penaltyCard,cardIndex})=>{
   S._attackAnnouncer=null;
   S._attackRevealActive=true;
-  // Don't clear S.drawnCard here — if this player was in discard phase,
-  // game:private will restore it so they can finish their turn after the attack
   clearInterval(S._annCdInt);
   hide($('attack-announce-bar'));
+  $('discard-pile')?.classList.remove('atk-target');
+  S._attackMode=false;
+  S._selIdx=-1;
   renderActions();
 
-  setTimeout(()=>SFX.play(success?'Success':'Fail', 0.85), 2800);
-  showAttackReveal(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard);
-  addLog(success?`✅ ${attackerUsername}: azzeccato! ${cardStr(card)}`:`❌ ${attackerUsername}: sbagliato! +1 carta`,success?'success':'danger');
-
-  if(success){
-    setTimeout(()=>{
-      if(String(attackerUserId)===String(S.userId)){
-        const removal=S._pendingAttackRemoval;
-        if(!removal) return;
-        animateHandCompaction({
-          visualIdx:removal.visualIdx,
-          commit:()=>{
-            removeHandOrderAfterAttack(removal.visualIdx,removal.serverIdx);
-            S._animHidden=null;
-          },
-          onDone:()=>{S._pendingAttackRemoval=null;},
-        });
-      }else{
-        animateOpponentHandRemoval(attackerUserId,Number.isInteger(cardIndex)?cardIndex:0);
-      }
-    },4550);
-  }else{
-    setTimeout(()=>{
-      S._pendingAttackRemoval=null;
-      S._animHidden=null;
-      renderMyHand();
-    },5050);
+  addLog(
+    success
+      ? `${attackerUsername}: ${t('attack_correct')} ${cardStr(card)}`
+      : `${attackerUsername}: ${t('attack_wrong')} ${t('attack_penalty')}`,
+    success?'success':'danger'
+  );
+  try{
+    await showFieldAttack(attackerUserId,attackerUsername,card,success,penaltyCard,discardCard,cardIndex);
+  }catch(error){
+    console.error('[attack field]',error);
+    clearAttackFieldVisuals();
   }
-
-  // At 2.5s: clear selection visual (game:state will drive the full unpause)
-  setTimeout(()=>{
-    if(attackerUserId===S.userId) S._attackMode=false;
-    S._selIdx=-1;
-    renderMyHand();renderScore();renderSeats();
-  },2500);
-
-  // Safety fallback: leave enough time for a post-popup penalty draw.
-  setTimeout(()=>{ if(S._attackRevealActive){ S._attackRevealActive=false; S._attackMode=false; S._attackAnnouncer=null; renderActions();renderTurnBanner(); } },8000);
 });
 
 socket.on('game:attack-penalty-draw', animateAttackPenaltyDraw);
@@ -1468,66 +1599,99 @@ function animateAttackPenaltyDraw({userId,targetCardCount}) {
   }));
 }
 
-// ── Attack reveal: discard card shown first, then attack card ─────────────
-function showAttackReveal(auId, auName, card, success, penaltyCard, discardCard) {
-  document.querySelector('.atk-reveal-overlay')?.remove();
-  const isMe = auId === S.userId;
+async function showFieldAttack(auId,auName,card,success,penaltyCard,discardCard,cardIndex=0,options={}) {
+  clearAttackFieldTimers();
+  document.querySelector('.attack-field-layer')?.remove();
+  const source=attackFieldSource(auId,cardIndex);
+  const sourceRect=S._pendingAttackRemoval?.sourceRect||source.rect||
+    Cards.rect($('deck-pile'));
+  const target=attackFieldTargetRect();
+  if(!sourceRect||!target) return;
 
-  const overlay = document.createElement('div');
-  overlay.className = 'atk-reveal-overlay';
-  overlay.innerHTML = `<div class="ar-box">
-    <div class="ar-who">${_lang==='en'
-      ? `Attack by ${esc(auName)}${isMe?' (you)':''}!`
-      : `${esc(auName)}${isMe?' (tu)':''} tenta un attacco!`}</div>
+  S._attackFieldMotion={
+    attackerUserId:auId,
+    sourceIndex:source.visualIdx,
+    serverIndex:cardIndex,
+    success,
+  };
+  if(source.isMe) renderMyHand();
+  else renderSeats();
 
-    <!-- Step 1: show discard card (immediately visible) -->
-    <div class="ar-step" id="ar-step1">
-      <div class="ar-vs-lbl">${_lang==='en'?'Card to match:':'Carta da abbinare:'}</div>
-      ${discardCard ? cardHTML({...discardCard,known:true}) : '<div class="ar-unknown">?</div>'}
-    </div>
+  const {layer,shell,status}=createAttackFieldCard(sourceRect,card,auName);
+  positionAttackFieldStatus(status,target);
+  await moveAttackFieldCard(shell,target,980,-58);
+  await attackFieldDelay(220);
+  await flipAttackFieldCard(shell,true);
+  await attackFieldDelay(180);
 
-    <!-- Step 2: suspense then reveal attack card -->
-    <div class="ar-step ar-hidden" id="ar-step2">
-      <div class="ar-vs-lbl">${_lang==='en'?'Attacker card:':"Carta dell'attaccante:"}</div>
-      <div class="ar-dots"><span></span><span></span><span></span></div>
-      <div class="ar-attack-card ar-hidden" id="ar-atk-card">
-        ${cardHTML({...card,known:true},{cls:'anim-appear'})}
-      </div>
-    </div>
+  status.textContent=success?t('attack_correct'):t('attack_wrong');
+  status.className=`attack-field-status visible ${success?'success':'fail'}`;
+  status.setAttribute('aria-label',`${t('attack_by')} ${auName}: ${status.textContent}`);
+  SFX.play(success?'Success':'Fail',0.85);
+  await attackFieldDelay(760);
 
-    <!-- Result -->
-    <div class="ar-result ar-hidden" id="ar-res">
-      ${success
-        ? `<div class="ar-success">${_lang==='en'?'CORRECT!':'AZZECCATO!'}</div>`
-        : `<div class="ar-fail">${_lang==='en'?'WRONG!':'SBAGLIATO!'}${penaltyCard?`<div class="ar-penalty">${_lang==='en'?'+1 card in hand':'+1 carta in mano'}</div>`:''}</div>`}
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
+  if(success){
+    S._skipDiscard=true;
+    await moveAttackFieldCard(shell,Cards.rect($('discard-pile')),1180,-68);
+    settleDiscardPile(card);
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    shell.remove();
+    if(options.testOnly){
+      S._attackFieldMotion=null;
+      S._pendingAttackRemoval=null;
+      S._animHidden=null;
+      renderMyHand();
+      renderSeats();
+      layer.classList.add('leaving');
+      setTimeout(()=>layer.remove(),320);
+      return;
+    }
 
-  // 1.2s: show step 2 with suspense dots
-  setTimeout(() => {
-    overlay.querySelector('#ar-step2')?.classList.remove('ar-hidden');
-  }, 1200);
+    if(source.isMe){
+      const removal=S._pendingAttackRemoval||{
+        visualIdx:source.visualIdx,
+        serverIdx:cardIndex,
+      };
+      animateHandCompaction({
+        visualIdx:removal.visualIdx,
+        commit:()=>{
+          S._attackFieldMotion=null;
+          removeHandOrderAfterAttack(removal.visualIdx,removal.serverIdx);
+          S._animHidden=null;
+        },
+        onDone:()=>{
+          S._pendingAttackRemoval=null;
+          layer.classList.add('leaving');
+          setTimeout(()=>layer.remove(),320);
+        },
+      });
+    }else if(source.seat){
+      animateOpponentHandRemoval(auId,Number.isInteger(cardIndex)?cardIndex:0);
+      layer.classList.add('leaving');
+      setTimeout(()=>layer.remove(),900);
+    }else{
+      S._attackFieldMotion=null;
+      layer.classList.add('leaving');
+      setTimeout(()=>layer.remove(),320);
+    }
+    return;
+  }
 
-  // 2.2s: reveal the attack card
-  setTimeout(() => {
-    overlay.querySelector('.ar-dots')?.remove();
-    const attackCard=overlay.querySelector('#ar-atk-card');
-    attackCard?.classList.remove('ar-hidden');
-    attackCard?.querySelector('.card-3d')?.classList.add('card-turn-in');
-  }, 2200);
-
-  // 3.2s: show result
-  setTimeout(() => {
-    overlay.querySelector('#ar-res')?.classList.remove('ar-hidden');
-  }, 3200);
-
-  // 5s: fade out
-  setTimeout(() => {
-    overlay.style.opacity = '0';
-    overlay.style.transition = 'opacity .4s';
-    setTimeout(() => overlay.remove(), 420);
-  }, 5000);
+  await flipAttackFieldCard(shell,false);
+  status.textContent=penaltyCard
+    ? `${t('attack_wrong')} · ${t('attack_penalty')}`
+    : t('attack_wrong');
+  await attackFieldDelay(180);
+  await moveAttackFieldCard(shell,sourceRect,980,42);
+  shell.remove();
+  layer.classList.add('leaving');
+  S._attackFieldMotion=null;
+  S._pendingAttackRemoval=null;
+  S._animHidden=null;
+  S._removalGap=null;
+  renderMyHand();
+  renderSeats();
+  setTimeout(()=>layer.remove(),320);
 }
 
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
@@ -2130,10 +2294,22 @@ window.buioTest = {
   },
   // Dump current game state
   state(){ return {gs:S.gameState,priv:S.privateState,drawn:S.drawnCard,hand:S.privateState?.hand}; },
-  // Show attack reveal UI test
+  // Show the field attack sequence without sending a server action.
   testReveal(success=true){
     const fc={suit:'bastoni',value:7,label:'7',symbol:'♣',color:'black',isSpecial:false};
-    showAttackReveal(S.userId,S.username||'Tu',fc,success,success?null:{suit:'denari',value:1},{suit:'denari',value:7,label:'7',symbol:'♦',color:'red',isSpecial:false});
+    S._attackRevealActive=true;
+    const run=showFieldAttack(
+      S.userId,
+      S.username||(_lang==='en'?'You':'Tu'),
+      fc,
+      success,
+      success?null:{suit:'denari',value:1},
+      {suit:'denari',value:7,label:'7',symbol:'♦',color:'red',isSpecial:false},
+      S.handOrder?.[0]??0,
+      {testOnly:true}
+    );
+    run.finally(()=>{S._attackRevealActive=false;});
+    return run;
   },
   // Show swap UI test
   testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
@@ -2243,6 +2419,8 @@ const I18N = {
     attack:'Attacca!', discard:'Scarta', waiting_turn:'In attesa del prossimo turno',
     spectator:'Spettatore', your_turn:'Giochi te!', choose_card:'Scegli carta!',
     discard_first:'Scarta prima!', attack_running:'Attacco in corso...',
+    attack_correct:'Azzeccato', attack_wrong:'Sbagliato', attack_penalty:'+1 carta',
+    attack_by:'Attacco di', attack_gap:'Attacco',
     choose_special:'Scegli l’azione per la carta speciale', swap:'Scambia',
     choose_swap:'Scegli la tua carta, poi quella di un avversario', your_card:'La tua carta',
     with_whom:'Con chi?', which_card:'Quale carta?', swap_title:'Scambio!',
@@ -2267,6 +2445,8 @@ const I18N = {
     attack:'Attack!', discard:'Discard', waiting_turn:'Waiting for the next turn',
     spectator:'Spectating', your_turn:'Your turn!', choose_card:'Choose a card!',
     discard_first:'Discard first!', attack_running:'Attack in progress...',
+    attack_correct:'Correct', attack_wrong:'Wrong', attack_penalty:'+1 card',
+    attack_by:'Attack by', attack_gap:'Attack',
     choose_special:'Choose the special-card action', swap:'Swap',
     choose_swap:'Choose your card, then an opponent card', your_card:'Your card',
     with_whom:'Swap with whom?', which_card:'Which card?', swap_title:'Swap!',

@@ -336,52 +336,130 @@ async function assertOpponentDiscardMotion(page, turnBarHeight) {
   await assertStableTurnBar(page, turnBarHeight);
 }
 
-async function assertAttackOverlayLayout(page) {
-  await page.evaluate(() => buioTest.testReveal(true));
-  await page.waitForSelector('.atk-reveal-overlay');
-  await page.waitForTimeout(300);
+async function assertFieldAttackLayout(page) {
   const before = await page.evaluate(() => {
-    const overlay = document.querySelector('.atk-reveal-overlay');
-    const box = document.querySelector('.ar-box');
+    const rect = selector => {
+      const value=document.querySelector(selector)?.getBoundingClientRect();
+      return value ? {left:value.left,top:value.top,width:value.width,height:value.height} : null;
+    };
     return {
-      z: Number(getComputedStyle(overlay).zIndex),
-      height: box.getBoundingClientRect().height,
+      table:rect('#poker-table'),
+      turn:rect('#turn-bar'),
+      hand:rect('.my-area'),
+      action:rect('#action-bar'),
+      discardTop:document.querySelector('#discard-pile .discard-card-top')?.dataset.cardId||null,
     };
   });
-  await capture(page, 'attack-overlay-suspense');
-  await page.waitForTimeout(2400);
-  const after = await page.evaluate(() => ({
-    height: document.querySelector('.ar-box').getBoundingClientRect().height,
-  }));
-  if (before.z <= 9999 || Math.abs(before.height - after.height) > 1) {
-    throw new Error(`Attack overlay is not stable/above cards: ${JSON.stringify({ before, after })}`);
+  await page.evaluate(() => {
+    window.__fieldPileLandings=[];
+    window.__fieldPileObserver?.disconnect();
+    window.__fieldPileObserver=new MutationObserver(()=>{
+      const field=document.querySelector('.attack-field-card')?.getBoundingClientRect();
+      const pile=document.querySelector('#discard-pile')?.getBoundingClientRect();
+      const top=document.querySelector('#discard-pile .discard-card-top')?.dataset.cardId||null;
+      const under=document.querySelector('#discard-pile .discard-card-under')?.dataset.cardId||null;
+      if(field&&pile) window.__fieldPileLandings.push({
+        top,under,
+        deltaLeft:Math.abs(field.left-pile.left),
+        deltaTop:Math.abs(field.top-pile.top),
+        deltaWidth:Math.abs(field.width-pile.width),
+        deltaHeight:Math.abs(field.height-pile.height),
+      });
+    });
+    window.__fieldPileObserver.observe(document.querySelector('#discard-pile'),{childList:true,subtree:true});
+  });
+  await page.evaluate(() => { void buioTest.testReveal(true); });
+  await page.waitForSelector('.attack-field-card');
+  if (await page.locator('.atk-reveal-overlay').count()) {
+    throw new Error('Legacy attack popup was rendered');
   }
-  await capture(page, 'attack-overlay-revealed');
-  await page.evaluate(() => document.querySelector('.atk-reveal-overlay')?.remove());
+  await page.waitForSelector('.attack-field-card.face-up', { timeout: 6000 });
+  await page.waitForSelector('.attack-field-status.success', { timeout: 6000 });
+  const during = await page.evaluate(() => {
+    const rect = selector => {
+      const value=document.querySelector(selector)?.getBoundingClientRect();
+      return value ? {left:value.left,top:value.top,width:value.width,height:value.height,right:value.right,bottom:value.bottom} : null;
+    };
+    const image=document.querySelector('.attack-field-front img');
+    return {
+      table:rect('#poker-table'),
+      turn:rect('#turn-bar'),
+      hand:rect('.my-area'),
+      action:rect('#action-bar'),
+      card:rect('.attack-field-card'),
+      status:rect('.attack-field-status'),
+      pile:rect('#discard-pile'),
+      decoded:Boolean(image?.complete&&image.naturalWidth),
+      faceUp:document.querySelector('.attack-field-card')?.classList.contains('face-up'),
+      viewportWidth:innerWidth,
+      sourceGaps:document.querySelectorAll('#my-hand .attack-source-gap').length,
+      discardTop:document.querySelector('#discard-pile .discard-card-top')?.dataset.cardId||null,
+    };
+  });
+  for (const key of ['table','turn','hand','action']) {
+    const a=before[key],b=during[key];
+    if(!a||!b||Math.abs(a.top-b.top)>.5||Math.abs(a.height-b.height)>.5) {
+      throw new Error(`Attack animation shifted ${key}: ${JSON.stringify({before:a,during:b})}`);
+    }
+  }
+  if (
+    !during.decoded ||
+    !during.faceUp ||
+    during.sourceGaps!==1 ||
+    during.discardTop!==before.discardTop ||
+    during.status.left<0 ||
+    during.status.right>during.viewportWidth ||
+    during.card.left<during.table.left ||
+    during.card.right>during.table.left+during.table.width
+  ) {
+    throw new Error(`Field attack layout was invalid: ${JSON.stringify(during)}`);
+  }
+  await capture(page, 'field-attack-revealed');
+  await page.waitForFunction(oldTop => {
+    const top=document.querySelector('#discard-pile .discard-card-top');
+    const under=document.querySelector('#discard-pile .discard-card-under');
+    return Boolean(top&&under&&top.dataset.cardId!==oldTop&&under.dataset.cardId===oldTop);
+  }, before.discardTop, { timeout: 6500 });
+  const landing = await page.evaluate(() => ({
+    layers:document.querySelectorAll('#discard-pile .discard-card-layer').length,
+    samples:window.__fieldPileLandings||[],
+  }));
+  const covered=landing.samples.some(sample =>
+    sample.deltaLeft<1&&sample.deltaTop<1&&sample.deltaWidth<1&&sample.deltaHeight<1
+  );
+  if(landing.layers!==2||!covered){
+    throw new Error(`Attack card did not cover the existing pile exactly: ${JSON.stringify(landing)}`);
+  }
+  await page.waitForFunction(() => !document.querySelector('.attack-field-layer'), null, { timeout: 7500 });
+  await page.evaluate(() => window.__fieldPileObserver?.disconnect());
 }
 
-async function assertMobileAttackOverlay(browser) {
+async function assertMobileFieldAttack(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => buioTest.testReveal(false));
-    await page.waitForSelector('.atk-reveal-overlay');
-    await page.waitForTimeout(300);
+    await registerAndStartBotGame(page, 'mobile-attack-field');
+    await page.evaluate(() => { void buioTest.testReveal(false); });
+    await page.waitForSelector('.attack-field-card.face-up', { timeout: 3500 });
+    await page.waitForSelector('.attack-field-status.fail', { timeout: 4000 });
     const layout = await page.evaluate(() => {
-      const box = document.querySelector('.ar-box').getBoundingClientRect();
+      const card = document.querySelector('.attack-field-card').getBoundingClientRect();
+      const status = document.querySelector('.attack-field-status').getBoundingClientRect();
       return {
-        left: box.left,
-        top: box.top,
-        right: box.right,
-        bottom: box.bottom,
+        card:{left:card.left,top:card.top,right:card.right,bottom:card.bottom},
+        status:{left:status.left,top:status.top,right:status.right,bottom:status.bottom},
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
       };
     });
-    if (layout.left < 0 || layout.top < 0 || layout.right > layout.viewportWidth || layout.bottom > layout.viewportHeight) {
-      throw new Error(`Attack overlay overflows mobile viewport: ${JSON.stringify(layout)}`);
+    if (
+      layout.card.left<0||layout.card.top<0||
+      layout.card.right>layout.viewportWidth||layout.card.bottom>layout.viewportHeight||
+      layout.status.left<0||layout.status.top<0||
+      layout.status.right>layout.viewportWidth||layout.status.bottom>layout.viewportHeight
+    ) {
+      throw new Error(`Field attack overflows mobile viewport: ${JSON.stringify(layout)}`);
     }
-    await capture(page, 'attack-overlay-mobile');
+    await capture(page, 'field-attack-mobile');
   } finally {
     await page.close();
   }
@@ -415,22 +493,22 @@ async function assertMobileHandCompaction(browser) {
   }
 }
 
-async function assertPenaltyAfterPopup(page) {
+async function assertPenaltyAfterFieldReturn(page) {
   const botId = await page.evaluate(() =>
     S.gameState?.players.find(player => String(player.userId) !== String(S.userId))?.userId
   );
   await page.evaluate(userId => {
-    buioTest.testReveal(false);
-    setTimeout(() => buioTest.testPenalty(userId), 5500);
+    void buioTest.testReveal(false);
+    setTimeout(() => buioTest.testPenalty(userId), 5600);
   }, botId);
-  await page.waitForSelector('.atk-reveal-overlay');
-  await page.waitForSelector('.penalty-draw-ghost', { timeout: 7000 });
+  await page.waitForSelector('.attack-field-card');
+  await page.waitForSelector('.penalty-draw-ghost', { timeout: 7500 });
   const state = await page.evaluate(() => ({
-    attackOverlay: Boolean(document.querySelector('.atk-reveal-overlay')),
+    fieldCard: Boolean(document.querySelector('.attack-field-card')),
     penaltyGhosts: document.querySelectorAll('.penalty-draw-ghost').length,
   }));
-  if (state.attackOverlay || state.penaltyGhosts !== 1) {
-    throw new Error(`Penalty draw overlapped the attack popup: ${JSON.stringify(state)}`);
+  if (state.fieldCard || state.penaltyGhosts !== 1) {
+    throw new Error(`Penalty draw overlapped the returning attack card: ${JSON.stringify(state)}`);
   }
   await page.waitForFunction(() => document.querySelectorAll('.penalty-draw-ghost').length === 0, null, { timeout: 3000 });
 }
@@ -467,15 +545,68 @@ async function assertBotResumesAfterHumanAttack(browser) {
       return mismatch ? S.handOrder.indexOf(mismatch.pos) : -1;
     });
     if (mismatchVisualIndex < 0) throw new Error('Could not find a deterministic wrong attack card');
+    const sourceBefore = await page.evaluate(index => {
+      const card=[...document.querySelectorAll('#my-hand .card-3d')][index];
+      const rect=card.getBoundingClientRect();
+      return {key:card.dataset.cardKey,left:rect.left,top:rect.top,width:rect.width,height:rect.height};
+    }, mismatchVisualIndex);
 
     await page.evaluate(() => document.querySelector('#btn-attack').click());
     await page.locator('#my-hand .card-3d').nth(mismatchVisualIndex).click();
-    await page.waitForSelector('.atk-reveal-overlay');
+    await page.waitForSelector('.attack-field-card');
+    await page.waitForSelector('#my-hand .attack-source-gap');
+    const gapState = await page.evaluate(() => {
+      const gap=document.querySelector('#my-hand .attack-source-gap');
+      return {
+        gaps:document.querySelectorAll('#my-hand .attack-source-gap').length,
+        clickable:gap?.classList.contains('clickable'),
+        selected:gap?.classList.contains('selected'),
+        target:gap?.classList.contains('atk-tgt'),
+        legacyPopup:Boolean(document.querySelector('.atk-reveal-overlay')),
+      };
+    });
+    if(gapState.gaps!==1||gapState.clickable||gapState.selected||gapState.target||gapState.legacyPopup){
+      throw new Error(`Wrong attack source was still usable: ${JSON.stringify(gapState)}`);
+    }
+    await page.waitForSelector('.attack-field-card.face-up', { timeout: 3500 });
     await page.waitForFunction(() =>
-      /WRONG|SBAGLIATO/.test(document.querySelector('#ar-res:not(.ar-hidden)')?.textContent || ''),
+      /wrong|sbagliato/i.test(document.querySelector('.attack-field-status.fail')?.textContent || ''),
       null,
       { timeout: 4500 }
     );
+    const revealed = await page.evaluate(() => ({
+      gap:document.querySelectorAll('#my-hand .attack-source-gap').length,
+      pileTop:document.querySelector('#discard-pile .discard-card-top')?.dataset.cardId,
+      status:document.querySelector('.attack-field-status')?.textContent,
+    }));
+    if(revealed.gap!==1) throw new Error(`Attack gap disappeared during reveal: ${JSON.stringify(revealed)}`);
+    await page.waitForFunction(() => !document.querySelector('.attack-field-layer'), null, { timeout: 6500 });
+    const returned = await page.evaluate(source => {
+      const card=document.querySelector(`#my-hand .card-3d[data-card-key="${source.key}"]`);
+      const rect=card?.getBoundingClientRect();
+      return {
+        found:Boolean(card),
+        left:rect?.left,
+        top:rect?.top,
+        gap:document.querySelectorAll('#my-hand .attack-source-gap').length,
+        clickable:card?.classList.contains('clickable'),
+        selected:card?.classList.contains('selected'),
+        target:card?.classList.contains('atk-tgt'),
+        attackActive:S._attackRevealActive,
+      };
+    }, sourceBefore);
+    if(
+      !returned.found||
+      Math.abs(returned.left-sourceBefore.left)>1||
+      Math.abs(returned.top-sourceBefore.top)>1||
+      returned.gap!==0||
+      returned.clickable||
+      returned.selected||
+      returned.target||
+      !returned.attackActive
+    ){
+      throw new Error(`Wrong attack card did not return cleanly: ${JSON.stringify({sourceBefore,returned})}`);
+    }
     await page.waitForFunction(() =>
       !S._attackRevealActive && !S.gameState?.presentationActive,
       null,
@@ -677,7 +808,7 @@ async function main() {
     if (beforeKeep.handCount !== afterKeep.handCount || afterKeep.drawnVisible || afterKeep.rightHidden || !afterKeep.discardHasImg) {
       throw new Error(`Keep-drawn animation ended in invalid state: ${JSON.stringify({ beforeKeep, afterKeep })}`);
     }
-    await assertAttackOverlayLayout(page);
+    await assertFieldAttackLayout(page);
     await page.evaluate(() => buioTest.testSwap());
     await page.waitForSelector('.swap-selected-source');
     const swapSlots = await page.evaluate(() => ({
@@ -688,7 +819,7 @@ async function main() {
       throw new Error(`Swap animation selected wrong slots: ${JSON.stringify(swapSlots)}`);
     }
     await page.evaluate(() => document.querySelector('.swap-overlay')?.remove());
-    await assertPenaltyAfterPopup(page);
+    await assertPenaltyAfterFieldReturn(page);
     await assertSoundDeduplication(page);
     await assertRoundEndSequence(page);
 
@@ -717,7 +848,7 @@ async function main() {
     ]);
     await page2.close();
     await assertBotResumesAfterHumanAttack(browser);
-    await assertMobileAttackOverlay(browser);
+    await assertMobileFieldAttack(browser);
     await assertMobileHandCompaction(browser);
 
     if (browserIssues.length) {

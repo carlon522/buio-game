@@ -1,6 +1,6 @@
 {
   "name": "buio-game",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "BUIO - Multiplayer Digital Card Game",
   "main": "server.js",
   "scripts": {

@@ -477,8 +477,8 @@ function presentAttack(roomId, attacker, discardCard, result) {
 
   cancelBotAttack(room);
   pauseBotSequence(room);
-  const penaltyDelay = 5500;
-  const finishDelay = result.penaltyCard ? 6600 : 5500;
+  const penaltyDelay = 5600;
+  const finishDelay = result.penaltyCard ? 7000 : 6200;
   room._revealUntil = Date.now() + finishDelay;
   room._presentationUntil = Date.now() + finishDelay;
 
