@@ -56,6 +56,7 @@ function showScreen(n) {
 }
 
 async function hydrateAppVersion() {
+  if ($('app-version')) $('app-version').textContent = 'v2.0.0';
   try {
     const res = await fetch('/api/version');
     if (!res.ok) return;
