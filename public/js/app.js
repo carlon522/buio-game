@@ -65,21 +65,37 @@ async function hydrateAppVersion() {
   } catch (_) {}
 }
 
-function loadMotionExtensions() {
-  if (!document.querySelector('link[data-buio-motion="v2"]')) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = '/css/buio-v2-motion.css?v=2';
-    link.dataset.buioMotion = 'v2';
-    document.head.appendChild(link);
-  }
-  if (!document.querySelector('script[data-buio-motion="v2"]')) {
-    const script = document.createElement('script');
-    script.src = '/js/buio-v2-motion.js?v=2';
-    script.async = false;
-    script.dataset.buioMotion = 'v2';
-    document.body.appendChild(script);
-  }
+function installFeatureStyles() {
+  if (document.getElementById('buio-feature-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'buio-feature-styles';
+  style.textContent = `
+.card-3d{box-sizing:border-box}
+.mini-card{box-sizing:border-box}
+.attack-field-status{white-space:normal;flex-direction:column;gap:.1rem;line-height:1.12;max-width:min(220px,58vw)}
+.attack-field-status-main{display:block}
+.attack-field-status-sub{display:block;font-size:.72em;letter-spacing:.04em;color:#ffd0cc}
+.center-cue{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:7300;pointer-events:none;text-align:center;padding:.55rem .95rem;border-radius:999px;background:rgba(8,4,0,.62);border:1px solid rgba(255,214,88,.42);box-shadow:0 10px 28px rgba(0,0,0,.42),0 0 22px rgba(255,214,88,.12);animation:center-cue-in .22s ease-out both;transition:opacity .24s,transform .24s}
+.center-cue.leaving{opacity:0;transform:translate(-50%,-50%) scale(.92)}
+.center-cue-title{font-size:clamp(1.35rem,4vw,2.35rem);line-height:1;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#ffd95a;text-shadow:0 2px 10px rgba(0,0,0,.8)}
+.center-cue-sub{margin-top:.2rem;font-size:.68rem;font-weight:800;letter-spacing:.04em;color:rgba(255,248,220,.78);text-transform:uppercase}
+@keyframes center-cue-in{from{opacity:0;transform:translate(-50%,-50%) scale(.82)}to{opacity:1;transform:translate(-50%,-50%)}}
+.card-3d.swap-own-selectable{box-shadow:0 0 0 3px #ffd95a,0 0 18px rgba(255,217,90,.58),2px 6px 14px rgba(0,0,0,.55)!important;animation:swap-pick-pulse 1.05s ease-in-out infinite}
+.card-3d.swap-own-selected{box-shadow:0 0 0 3px #e74c3c,0 0 22px rgba(231,76,60,.72),2px 6px 14px rgba(0,0,0,.55)!important;animation:none}
+.card-3d.swap-busy{pointer-events:none;filter:saturate(.8)}
+@keyframes swap-pick-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.24)}}
+.seat .mini-card{width:34px;height:52px}
+.seat .mini-card.swap-target-selectable{cursor:pointer;box-shadow:0 0 0 2px #ffd95a,0 0 16px rgba(255,217,90,.62);animation:swap-target-pulse 1s ease-in-out infinite;transform:none!important}
+.seat .mini-card.swap-target-selectable:hover{box-shadow:0 0 0 3px #fff0a8,0 0 20px rgba(255,217,90,.72)}
+@keyframes swap-target-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.18)}}
+.swap-field-layer{position:fixed;inset:0;z-index:7250;pointer-events:none;opacity:1;transition:opacity .35s}
+.swap-field-layer.leaving{opacity:0}
+.swap-field-card{position:fixed;margin:0;z-index:7251;will-change:left,top,transform;box-shadow:0 18px 32px rgba(0,0,0,.72),0 0 0 2px rgba(255,217,90,.18)}
+.swap-field-card.swap-paused{box-shadow:0 18px 34px rgba(0,0,0,.76),0 0 0 3px rgba(255,217,90,.42),0 0 24px rgba(255,217,90,.25)}
+.card-3d.swap-own-selectable:hover{transform:none!important}
+@media(max-width:600px){.seat .mini-card{width:29px;height:45px}.center-cue{padding:.45rem .75rem}}
+`.trim();
+  document.head.appendChild(style);
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -1700,98 +1716,81 @@ async function showFieldAttack(auId,auName,card,success,penaltyCard,discardCard,
 }
 
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
-function showSwapAnimation(initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
-  document.querySelector('.swap-overlay')?.remove();
-  SFX.play('Swapswoosh', 0.75);
-
-  const makePile = (n) =>
-    Array(Math.min(n, 8)).fill(0)
-      .map(() => cardHTML({known:false},{cls:'swap-mini-back'}))
-      .join('');
-
-  const overlay = document.createElement('div');
-  overlay.className = 'swap-overlay';
-  overlay.innerHTML = `<div class="swap-box">
-    <div class="swap-title">${t('swap_title')}</div>
-    <div class="swap-piles-row">
-      <div class="swap-section">
-        <div class="swap-pname">${esc(initiatorName)}</div>
-        <div class="swap-pile-row" id="spl-l">${makePile(iCount)}</div>
-      </div>
-      <div class="swap-arrow-mid">⇄</div>
-      <div class="swap-section">
-        <div class="swap-pname">${esc(targetName)}</div>
-        <div class="swap-pile-row" id="spl-r">${makePile(tCount)}</div>
-      </div>
-    </div>
-    <div class="swap-prog-wrap"><div id="sp" class="swap-prog"></div></div>
-  </div>`;
-  document.body.appendChild(overlay);
-
-  // After layout renders, get exact card positions and animate
-  setTimeout(() => {
-    const lCards = Array.from(overlay.querySelectorAll('#spl-l .swap-mini-back'));
-    const rCards = Array.from(overlay.querySelectorAll('#spl-r .swap-mini-back'));
-    const src = lCards[Math.max(0, Math.min(initiatorIndex, lCards.length - 1))];
-    const dst = rCards[Math.max(0, Math.min(targetIndex, rCards.length - 1))];
-    if (!src || !dst) return;
-
-    const sr = src.getBoundingClientRect();
-    const dr = dst.getBoundingClientRect();
-
-    // Highlight source cards
-    src.classList.add('swap-selected-source');
-    dst.classList.add('swap-selected-target');
-    src.style.outline = '2px solid var(--gold)';
-    dst.style.outline = '2px solid var(--gold)';
-
-    // Ghost cards at exact positions, cross over
-    const makeGhost = (r) => {
-      const g = document.createElement('div');
-      g.className = 'card-3d card-back card-ghost swap-fly-card';
-      g.style.cssText = [
-        `position:fixed`, `z-index:9998`, `pointer-events:none`,
-        `left:${r.left}px`, `top:${r.top}px`,
-        `width:${r.width}px`, `height:${r.height}px`,
-        `box-shadow:0 6px 18px rgba(0,0,0,.7)`
-      ].join(';');
-      document.body.appendChild(g);
-      return g;
-    };
-
-    const gl = makeGhost(sr);
-    const gr = makeGhost(dr);
-
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const DUR = '.85s cubic-bezier(.4,0,.2,1)';
-      gl.style.transition = `all ${DUR}`;
-      gl.style.left = dr.left + 'px';
-      gl.style.top  = dr.top  + 'px';
-
-      gr.style.transition = `all ${DUR}`;
-      gr.style.left = sr.left + 'px';
-      gr.style.top  = sr.top  + 'px';
-    }));
-
-    setTimeout(() => { gl.remove(); gr.remove(); }, 950);
-  }, 400);
-
-  // Progress bar
-  const prog = overlay.querySelector('#sp');
-  if (prog) {
-    prog.style.width = '100%';
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      prog.style.transition = 'width 3.5s linear';
-      prog.style.width = '0%';
-    }));
+function swapSourceRect(userId, visualIndex) {
+  if(String(userId)===String(S.userId)){
+    return Cards.rect($('my-hand')?.querySelectorAll('.card-3d')[visualIndex]);
   }
-
-  setTimeout(() => {
-    overlay.style.opacity = '0';
-    overlay.style.transition = 'opacity .4s';
-    setTimeout(() => overlay.remove(), 420);
-  }, 3500);
+  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
+  return Cards.rect(seat?.querySelectorAll('.mini-card:not(.mini-incoming):not(.opp-drawn-card)')[visualIndex]) || Cards.rect(seat?.querySelector('.seat-cards'));
 }
+function swapTableRect() {
+  return Cards.rect(document.querySelector('.table-center')) || Cards.rect($('discard-pile')) || Cards.rect(document.querySelector('.poker-table'));
+}
+// ── Otto swap: slow, traceable face-down cards through table center ───────
+function showSwapAnimation(initiatorUserId, targetUserId, initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
+  SFX.play('Swapswoosh', 0.75);
+  showCenterCue('Scambio', `${initiatorName} ⇄ ${targetName}`);
+  const srcA=swapSourceRect(initiatorUserId, initiatorIndex);
+  const srcB=swapSourceRect(targetUserId, targetIndex);
+  const mid=swapTableRect();
+  if(!srcA||!srcB||!mid){ setTimeout(clearSwap8Mode, 1200); return; }
+
+  const involvedMe=String(initiatorUserId)===String(S.userId)||String(targetUserId)===String(S.userId);
+  const oldAnimHidden=S._animHidden;
+  const oldOppMotions=S._oppMotions?{...S._oppMotions}:null;
+  if(String(initiatorUserId)===String(S.userId)) S._animHidden=new Set([initiatorIndex]);
+  if(String(targetUserId)===String(S.userId)) S._animHidden=new Set([targetIndex]);
+  if(String(initiatorUserId)!==String(S.userId)) setOpponentMotion(initiatorUserId,{kind:'swap',sourceIndex:initiatorIndex,timeout:setTimeout(()=>{},1)});
+  if(String(targetUserId)!==String(S.userId)) setOpponentMotion(targetUserId,{kind:'swap',sourceIndex:targetIndex,timeout:setTimeout(()=>{},1)});
+  renderMyHand();renderSeats();
+
+  const layer=document.createElement('div');
+  layer.className='swap-field-layer';
+  document.body.appendChild(layer);
+  const makeGhost=(r,label)=>{
+    const g=document.createElement('div');
+    g.className='card-3d card-back swap-field-card';
+    g.setAttribute('aria-label', label);
+    Object.assign(g.style,{left:`${r.left}px`,top:`${r.top}px`,width:`${r.width}px`,height:`${r.height}px`});
+    layer.appendChild(g);
+    return g;
+  };
+  const a=makeGhost(srcA, initiatorName);
+  const b=makeGhost(srcB, targetName);
+  const center={left:mid.left+mid.width/2-srcA.width/2, top:mid.top+mid.height/2-srcA.height/2};
+  const centerB={left:mid.left+mid.width/2-srcB.width/2, top:mid.top+mid.height/2-srcB.height/2};
+  const endA={left:srcB.left+srcB.width/2-srcA.width/2, top:srcB.top+srcB.height/2-srcA.height/2};
+  const endB={left:srcA.left+srcA.width/2-srcB.width/2, top:srcA.top+srcA.height/2-srcB.height/2};
+  const move=(el,pos,rot=0,scale=1)=>{ el.style.left=`${pos.left}px`; el.style.top=`${pos.top}px`; el.style.transform=`rotate(${rot}deg) scale(${scale})`; };
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    a.style.transition='left 1400ms cubic-bezier(.2,.7,.2,1),top 1400ms cubic-bezier(.2,.7,.2,1),transform 1400ms';
+    b.style.transition=a.style.transition;
+    move(a,{left:center.left-18,top:center.top},-4,1.08);
+    move(b,{left:centerB.left+18,top:centerB.top},4,1.08);
+  }));
+  setTimeout(()=>{
+    a.classList.add('swap-paused'); b.classList.add('swap-paused');
+  },1450);
+  setTimeout(()=>{
+    a.classList.remove('swap-paused'); b.classList.remove('swap-paused');
+    a.style.transition='left 1600ms cubic-bezier(.32,.02,.22,1),top 1600ms cubic-bezier(.32,.02,.22,1),transform 1600ms';
+    b.style.transition=a.style.transition;
+    move(a,endA,5,1);
+    move(b,endB,-5,1);
+  },1900);
+  setTimeout(()=>{
+    layer.classList.add('leaving');
+    hideCenterCue();
+    S._animHidden=oldAnimHidden;
+    if(S._oppMotions){ Object.keys(S._oppMotions).forEach(id=>{ if(S._oppMotions[id]?.kind==='swap') delete S._oppMotions[id]; }); }
+    if(oldOppMotions) S._oppMotions={...(S._oppMotions||{}),...oldOppMotions};
+    if(!Object.keys(S._oppMotions||{}).length) S._oppMotions=null;
+    S._swap8Mode=null;
+    renderMyHand();renderSeats();renderActions();
+    setTimeout(()=>layer.remove(),360);
+  },3650);
+}
+
 
 socket.on('game:swap-reveal', ({
   initiatorUserId, initiatorUsername, targetUserId, targetUsername,
@@ -1806,7 +1805,8 @@ socket.on('game:swap-reveal', ({
   const tVisual = String(targetUserId) === String(S.userId)
     ? Math.max(0, (S.handOrder || []).indexOf(targetCardIndex))
     : targetCardIndex;
-  showSwapAnimation(initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
+  showSwapAnimation(initiatorUserId, targetUserId, initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
+  S._swap8Mode=null;
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
@@ -2396,7 +2396,7 @@ window.buioTest = {
     return run;
   },
   // Show swap UI test
-  testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
+  testSwap(){ showSwapAnimation(S.userId, S.gameState?.players.find(p=>String(p.userId)!==String(S.userId))?.userId, 'Mario','Luigi',4,4,0,3); },
   testPenalty(userId=S.userId){
     const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
     animateAttackPenaltyDraw({userId,targetCardCount:(player?.cardCount||4)+1});
@@ -2641,7 +2641,7 @@ $('lobby-lang-toggle').addEventListener('click',setLanguageToggle);
   S._selIdx=-1;
   preloadCardImages();
   hydrateAppVersion();
-  loadMotionExtensions();
+  installFeatureStyles();
   applyLang(); // apply saved language on load
   // Set mute button icon from saved preference
   const btn=$('mute-btn');
