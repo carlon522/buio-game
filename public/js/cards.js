@@ -8,7 +8,6 @@ const Cards = (() => {
     keep: 950,
     discard: 980,
     forced: 980,
-    attack: 820,
     opponent: 980,
     swap: 1100,
   };
@@ -294,19 +293,6 @@ const Cards = (() => {
     });
   }
 
-  function attackCard(handSlotRect, pileRect, onLand, card) {
-    fly({
-      from: handSlotRect,
-      to: pileRect,
-      card,
-      duration: D.attack,
-      arc: -86,
-      spin: -14,
-      z: 9999,
-      onDone: landOnPile(onLand),
-    });
-  }
-
   function oppDraw(deckRect, seatTargetRect, onLand) {
     fly({
       from: deckRect,
@@ -378,7 +364,6 @@ const Cards = (() => {
     keepDrawnToHand,
     forcedReplacement,
     forcedDiscard,
-    attackCard,
     oppDraw,
     oppDiscard,
     oppKeepDrawn,
