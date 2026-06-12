@@ -1495,10 +1495,21 @@ socket.on('game:peeked',({cardIndex,card})=>{
   if(S.privateState?.hand?.[cardIndex]) S.privateState.hand[cardIndex]={...card,known:true,index:cardIndex};
   renderScore();
   const vi=(S.handOrder||[]).findIndex(si=>si===cardIndex);
-  // Show the peeked card face-up in hand for 3s, then back down
-  S._tempRevealServerIdx=cardIndex;
-  renderMyHand();
-  setTimeout(()=>{ S._tempRevealServerIdx=null; renderMyHand(); },3000);
+  // Decode the looked-card image before flipping it face-up. This keeps the
+  // card back visible until the image is ready, avoiding a white blank frame.
+  const revealToken=Symbol('look-card-reveal');
+  S._lookRevealToken=revealToken;
+  primeCardImage(card).finally(()=>{
+    if(S._lookRevealToken!==revealToken) return;
+    S._tempRevealServerIdx=cardIndex;
+    renderMyHand();
+    setTimeout(()=>{
+      if(S._lookRevealToken!==revealToken) return;
+      S._lookRevealToken=null;
+      S._tempRevealServerIdx=null;
+      renderMyHand();
+    },3000);
+  });
   addLog(`👁 Posizione #${vi>=0?vi+1:'?'}: ricordatela!`,'gold');
 });
 
