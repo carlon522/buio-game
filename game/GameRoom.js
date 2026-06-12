@@ -265,7 +265,8 @@ class GameRoom {
     }
     player.seenCards = newSeen;
 
-    if (discardedCard.value === 10) this.forcedDiscardNext = true;
+    // A 10 discarded during an existing forced-discard does not chain another
+    // forced-discard cycle; the effect applies only to normal turn discards.
 
     // 3. Draw replacement to the right end and mark it known.
     if (this.deck.length === 0 && this.discardPile.length > 1) {
