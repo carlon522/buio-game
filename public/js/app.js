@@ -56,7 +56,7 @@ function showScreen(n) {
 }
 
 async function hydrateAppVersion() {
-  if ($('app-version')) $('app-version').textContent = 'v2.0.0';
+  if ($('app-version')) $('app-version').textContent = 'v3.0.0';
   try {
     const res = await fetch('/api/version');
     if (!res.ok) return;
@@ -65,37 +65,21 @@ async function hydrateAppVersion() {
   } catch (_) {}
 }
 
-function installFeatureStyles() {
-  if (document.getElementById('buio-feature-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'buio-feature-styles';
-  style.textContent = `
-.card-3d{box-sizing:border-box}
-.mini-card{box-sizing:border-box}
-.attack-field-status{white-space:normal;flex-direction:column;gap:.1rem;line-height:1.12;max-width:min(220px,58vw)}
-.attack-field-status-main{display:block}
-.attack-field-status-sub{display:block;font-size:.72em;letter-spacing:.04em;color:#ffd0cc}
-.center-cue{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:7300;pointer-events:none;text-align:center;padding:.55rem .95rem;border-radius:999px;background:rgba(8,4,0,.62);border:1px solid rgba(255,214,88,.42);box-shadow:0 10px 28px rgba(0,0,0,.42),0 0 22px rgba(255,214,88,.12);animation:center-cue-in .22s ease-out both;transition:opacity .24s,transform .24s}
-.center-cue.leaving{opacity:0;transform:translate(-50%,-50%) scale(.92)}
-.center-cue-title{font-size:clamp(1.35rem,4vw,2.35rem);line-height:1;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#ffd95a;text-shadow:0 2px 10px rgba(0,0,0,.8)}
-.center-cue-sub{margin-top:.2rem;font-size:.68rem;font-weight:800;letter-spacing:.04em;color:rgba(255,248,220,.78);text-transform:uppercase}
-@keyframes center-cue-in{from{opacity:0;transform:translate(-50%,-50%) scale(.82)}to{opacity:1;transform:translate(-50%,-50%)}}
-.card-3d.swap-own-selectable{box-shadow:0 0 0 3px #ffd95a,0 0 18px rgba(255,217,90,.58),2px 6px 14px rgba(0,0,0,.55)!important;animation:swap-pick-pulse 1.05s ease-in-out infinite}
-.card-3d.swap-own-selected{box-shadow:0 0 0 3px #e74c3c,0 0 22px rgba(231,76,60,.72),2px 6px 14px rgba(0,0,0,.55)!important;animation:none}
-.card-3d.swap-busy{pointer-events:none;filter:saturate(.8)}
-@keyframes swap-pick-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.24)}}
-.seat .mini-card{width:34px;height:52px}
-.seat .mini-card.swap-target-selectable{cursor:pointer;box-shadow:0 0 0 2px #ffd95a,0 0 16px rgba(255,217,90,.62);animation:swap-target-pulse 1s ease-in-out infinite;transform:none!important}
-.seat .mini-card.swap-target-selectable:hover{box-shadow:0 0 0 3px #fff0a8,0 0 20px rgba(255,217,90,.72)}
-@keyframes swap-target-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.18)}}
-.swap-field-layer{position:fixed;inset:0;z-index:7250;pointer-events:none;opacity:1;transition:opacity .35s}
-.swap-field-layer.leaving{opacity:0}
-.swap-field-card{position:fixed;margin:0;z-index:7251;will-change:left,top,transform;box-shadow:0 18px 32px rgba(0,0,0,.72),0 0 0 2px rgba(255,217,90,.18)}
-.swap-field-card.swap-paused{box-shadow:0 18px 34px rgba(0,0,0,.76),0 0 0 3px rgba(255,217,90,.42),0 0 24px rgba(255,217,90,.25)}
-.card-3d.swap-own-selectable:hover{transform:none!important}
-@media(max-width:600px){.seat .mini-card{width:29px;height:45px}.center-cue{padding:.45rem .75rem}}
-`.trim();
-  document.head.appendChild(style);
+function loadMotionExtensions() {
+  if (!document.querySelector('link[data-buio-motion="v3"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/css/buio-v3-animation-overhaul.css?v=3';
+    link.dataset.buioMotion = 'v3';
+    document.head.appendChild(link);
+  }
+  if (!document.querySelector('script[data-buio-motion="v3"]')) {
+    const script = document.createElement('script');
+    script.src = '/js/buio-v3-animation-overhaul.js?v=3';
+    script.async = false;
+    script.dataset.buioMotion = 'v3';
+    document.body.appendChild(script);
+  }
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -880,7 +864,8 @@ function renderSeats() {
     const drawing=S._drawingSet&&S._drawingSet.has(player.userId);
     const drawn=S._oppDrawn&&S._oppDrawn[player.userId];
     const motion=getOpponentMotion(player.userId);
-    const minis=Array(Math.max(0,player.cardCount)).fill(0).map((_,i,a)=>{
+    const displayCount=Number.isInteger(motion?.frozenCount)?motion.frozenCount:player.cardCount;
+    const minis=Array(Math.max(0,displayCount)).fill(0).map((_,i,a)=>{
       const incoming=drawing&&i===a.length-1;
       const attackGap=String(S._attackFieldMotion?.attackerUserId)===String(player.userId)&&
         S._attackFieldMotion?.sourceIndex===i;
@@ -1538,6 +1523,10 @@ socket.on('game:card-discarded',({card, discarderId, handIndex, forced})=>{
     if(!S._skipDiscard) setTimeout(()=>renderDiscardPile(card),50);
   }
   addLog(`${cardStr(card)} scartata`,'info');
+  if(String(card?.value)==='8'){
+    const player=S.gameState?.players?.find(p=>String(p.userId)===String(discarderId));
+    showCenterCue('Scambio', `${player?.username||'Un giocatore'} ha scartato un 8 — preparati`, 30000);
+  }
   renderActions();
 });
 
