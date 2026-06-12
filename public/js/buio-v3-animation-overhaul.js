@@ -86,9 +86,9 @@
       const frame=now=>{
         if(started===null) started=now;
         const raw=clamp((now-started)/duration,0,1);
-        const t=smoother(raw);
-        const x=bezier(from.left,c.left,end.left,t)-from.left;
-        const y=bezier(from.top,c.top,end.top,t)-from.top;
+        const t=opts.linear?raw:smoother(raw);
+        const x=(opts.linear?lerp(from.left,end.left,t):bezier(from.left,c.left,end.left,t))-from.left;
+        const y=(opts.linear?lerp(from.top,end.top,t):bezier(from.top,c.top,end.top,t))-from.top;
         const sx=lerp(1,end.width/Math.max(1,from.width),t);
         const sy=lerp(1,end.height/Math.max(1,from.height),t);
         const rot=Math.sin(Math.PI*raw)*spin;
@@ -124,9 +124,9 @@
       fly({from:opts.handSlotRect,to:opts.pileRect,card:opts.discardCard,face:opts.discardFace||'auto',duration:D.forced,arc:-52,spin:-4,z:9999,onDone:landOnPile(opts.onPileLand)});
       return fly({from:opts.deckRect,to:opts.appendSlotRect||opts.targetSlotRect,card:opts.drawCard,face:opts.drawFace||'down',duration:D.keep,arc:-20,spin:2,z:9998,onDone:removeOnDone(opts.onDeckLand)});
     },
-    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:-32,spin:1.5,z:9990,onDone:removeOnDone(onLand)});},
-    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:-54,spin:-3,z:9995,onDone:landOnPile(onLand)});},
-    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:-24,spin:1.5,z:9994,onDone:removeOnDone(onLand)});},
+    oppDraw(deckRect,seatTargetRect,onLand){return fly({from:deckRect,to:seatTargetRect,toW:miniSize('w'),toH:miniSize('h'),face:'down',duration:D.opponent,arc:0,spin:0,linear:true,z:9990,onDone:removeOnDone(onLand)});},
+    oppDiscard(fromRect,pileRect,onLand,card,face='down'){return fly({from:fromRect,to:pileRect,card,face,className:'opp-discard-ghost',toW:rootSize('w'),toH:rootSize('h'),duration:D.opponent+80,arc:0,spin:0,linear:true,z:9995,onDone:landOnPile(onLand)});},
+    oppKeepDrawn(drawnRect,handRect,onLand){return fly({from:drawnRect,to:handRect,face:'down',className:'opp-keep-ghost',toW:miniSize('w'),toH:miniSize('h'),duration:D.opponent,arc:0,spin:0,linear:true,z:9994,onDone:removeOnDone(onLand)});},
     swap(rectA,rectB,onDone){
       let done=0;const oneDone=()=>{if(++done===2)onDone?.();};
       const a=fly({from:rectA,to:rectB,face:'down',duration:D.swap,arc:-58,spin:3,z:9992,onDone:removeOnDone(oneDone)});
