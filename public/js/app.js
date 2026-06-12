@@ -1682,133 +1682,97 @@ async function showFieldAttack(auId,auName,card,success,penaltyCard,discardCard,
 }
 
 // ── Otto swap: face-down cards crossing between two piles ─────────────────
-function swapSourceRect(userId, visualIndex) {
-  if(String(userId)===String(S.userId)){
-    return Cards.rect($('my-hand')?.querySelectorAll('.card-3d')[visualIndex]);
-  }
-  const seat=document.querySelector(`.seat[data-user-id="${userId}"]`);
-  return Cards.rect(seat?.querySelectorAll('.mini-card:not(.mini-incoming):not(.opp-drawn-card)')[visualIndex]) || Cards.rect(seat?.querySelector('.seat-cards'));
-}
-function swapTableRect() {
-  return Cards.rect(document.querySelector('.table-center')) || Cards.rect($('discard-pile')) || Cards.rect(document.querySelector('.poker-table'));
-}
-// ── Otto swap: slow, traceable face-down cards through table center ───────
-function showSwapAnimation(initiatorUserId, targetUserId, initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
+function showSwapAnimation(initiatorName, targetName, iCount, tCount, initiatorIndex=0, targetIndex=0) {
+  document.querySelector('.swap-overlay')?.remove();
   SFX.play('Swapswoosh', 0.75);
-  showCenterCue('Scambio', `${initiatorName} ⇄ ${targetName}`);
-  const srcA=swapSourceRect(initiatorUserId, initiatorIndex);
-  const srcB=swapSourceRect(targetUserId, targetIndex);
-  const mid=swapTableRect();
-  if(!srcA||!srcB||!mid){ setTimeout(clearSwap8Mode, 1200); return; }
 
-  const oldAnimHidden=S._animHidden;
-  const oldOppMotions=S._oppMotions?{...S._oppMotions}:null;
-  if(String(initiatorUserId)===String(S.userId)) S._animHidden=new Set([initiatorIndex]);
-  if(String(targetUserId)===String(S.userId)) S._animHidden=new Set([targetIndex]);
-  if(String(initiatorUserId)!==String(S.userId)) setOpponentMotion(initiatorUserId,{kind:'swap',sourceIndex:initiatorIndex,timeout:setTimeout(()=>{},1)});
-  if(String(targetUserId)!==String(S.userId)) setOpponentMotion(targetUserId,{kind:'swap',sourceIndex:targetIndex,timeout:setTimeout(()=>{},1)});
-  renderMyHand();renderSeats();
+  const makePile = (n) =>
+    Array(Math.min(n, 8)).fill(0)
+      .map(() => cardHTML({known:false},{cls:'swap-mini-back'}))
+      .join('');
 
-  const layer=document.createElement('div');
-  layer.className='swap-field-layer';
-  document.body.appendChild(layer);
-  const makeGhost=(r,label)=>{
-    const g=document.createElement('div');
-    g.className='card-3d card-back swap-field-card';
-    g.setAttribute('aria-label', label);
-    Object.assign(g.style,{
-      left:`${r.left}px`,top:`${r.top}px`,width:`${r.width}px`,height:`${r.height}px`,
-      transform:'translate3d(0,0,0) scale(1) rotate(0deg)',
-    });
-    layer.appendChild(g);
-    return g;
-  };
-  const a=makeGhost(srcA, initiatorName);
-  const b=makeGhost(srcB, targetName);
-  const centerA={
-    left:mid.left+mid.width/2-srcA.width/2-18,
-    top:mid.top+mid.height/2-srcA.height/2,
-    scaleX:1.08,scaleY:1.08,rot:-4,
-  };
-  const centerB={
-    left:mid.left+mid.width/2-srcB.width/2+18,
-    top:mid.top+mid.height/2-srcB.height/2,
-    scaleX:1.08,scaleY:1.08,rot:4,
-  };
-  const endA={
-    left:srcB.left+srcB.width/2-srcA.width/2,
-    top:srcB.top+srcB.height/2-srcA.height/2,
-    scaleX:srcB.width/Math.max(1,srcA.width),
-    scaleY:srcB.height/Math.max(1,srcA.height),
-    rot:0,
-  };
-  const endB={
-    left:srcA.left+srcA.width/2-srcB.width/2,
-    top:srcA.top+srcA.height/2-srcB.height/2,
-    scaleX:srcA.width/Math.max(1,srcB.width),
-    scaleY:srcA.height/Math.max(1,srcB.height),
-    rot:0,
-  };
-  const smooth=t=>t*t*t*(t*(t*6-15)+10);
-  const lerp=(x,y,t)=>x+(y-x)*t;
-  const place=(el,start,pos)=>{
-    const dx=pos.left-start.left;
-    const dy=pos.top-start.top;
-    el.style.transform=`translate3d(${dx}px,${dy}px,0) scale(${pos.scaleX},${pos.scaleY}) rotate(${pos.rot}deg)`;
-  };
-  const animate=(el,start,midPoint,endPoint,duration=3600)=>new Promise(resolve=>{
-    const pauseFrom=.43;
-    const pauseTo=.57;
-    let began=null;
-    let paused=false;
-    const startPoint={left:start.left,top:start.top,scaleX:1,scaleY:1,rot:0};
-    const frame=now=>{
-      if(began===null) began=now;
-      const raw=Math.min(1,(now-began)/duration);
-      let pos;
-      if(raw<pauseFrom){
-        const t=smooth(raw/pauseFrom);
-        pos={
-          left:lerp(startPoint.left,midPoint.left,t),
-          top:lerp(startPoint.top,midPoint.top,t),
-          scaleX:lerp(startPoint.scaleX,midPoint.scaleX,t),
-          scaleY:lerp(startPoint.scaleY,midPoint.scaleY,t),
-          rot:lerp(startPoint.rot,midPoint.rot,t),
-        };
-      } else if(raw<pauseTo){
-        if(!paused){ el.classList.add('swap-paused'); paused=true; }
-        pos=midPoint;
-      } else {
-        if(paused){ el.classList.remove('swap-paused'); paused=false; }
-        const t=smooth((raw-pauseTo)/(1-pauseTo));
-        pos={
-          left:lerp(midPoint.left,endPoint.left,t),
-          top:lerp(midPoint.top,endPoint.top,t),
-          scaleX:lerp(midPoint.scaleX,endPoint.scaleX,t),
-          scaleY:lerp(midPoint.scaleY,endPoint.scaleY,t),
-          rot:lerp(midPoint.rot,endPoint.rot,t),
-        };
-      }
-      place(el,start,pos);
-      if(raw<1) requestAnimationFrame(frame);
-      else { place(el,start,endPoint); resolve(); }
+  const overlay = document.createElement('div');
+  overlay.className = 'swap-overlay';
+  overlay.innerHTML = `<div class="swap-box">
+    <div class="swap-title">${t('swap_title')}</div>
+    <div class="swap-piles-row">
+      <div class="swap-section">
+        <div class="swap-pname">${esc(initiatorName)}</div>
+        <div class="swap-pile-row" id="spl-l">${makePile(iCount)}</div>
+      </div>
+      <div class="swap-arrow-mid">⇄</div>
+      <div class="swap-section">
+        <div class="swap-pname">${esc(targetName)}</div>
+        <div class="swap-pile-row" id="spl-r">${makePile(tCount)}</div>
+      </div>
+    </div>
+    <div class="swap-prog-wrap"><div id="sp" class="swap-prog"></div></div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  // After layout renders, get exact card positions and animate
+  setTimeout(() => {
+    const lCards = Array.from(overlay.querySelectorAll('#spl-l .swap-mini-back'));
+    const rCards = Array.from(overlay.querySelectorAll('#spl-r .swap-mini-back'));
+    const src = lCards[Math.max(0, Math.min(initiatorIndex, lCards.length - 1))];
+    const dst = rCards[Math.max(0, Math.min(targetIndex, rCards.length - 1))];
+    if (!src || !dst) return;
+
+    const sr = src.getBoundingClientRect();
+    const dr = dst.getBoundingClientRect();
+
+    // Highlight source cards
+    src.classList.add('swap-selected-source');
+    dst.classList.add('swap-selected-target');
+    src.style.outline = '2px solid var(--gold)';
+    dst.style.outline = '2px solid var(--gold)';
+
+    // Ghost cards at exact positions, cross over
+    const makeGhost = (r) => {
+      const g = document.createElement('div');
+      g.className = 'card-3d card-back card-ghost swap-fly-card';
+      g.style.cssText = [
+        `position:fixed`, `z-index:9998`, `pointer-events:none`,
+        `left:${r.left}px`, `top:${r.top}px`,
+        `width:${r.width}px`, `height:${r.height}px`,
+        `box-shadow:0 6px 18px rgba(0,0,0,.7)`
+      ].join(';');
+      document.body.appendChild(g);
+      return g;
     };
-    requestAnimationFrame(()=>requestAnimationFrame(frame));
-  });
 
-  Promise.all([animate(a,srcA,centerA,endA),animate(b,srcB,centerB,endB)]).then(()=>{
-    hideCenterCue();
-    S._animHidden=oldAnimHidden;
-    if(S._oppMotions){ Object.keys(S._oppMotions).forEach(id=>{ if(S._oppMotions[id]?.kind==='swap') delete S._oppMotions[id]; }); }
-    if(oldOppMotions) S._oppMotions={...(S._oppMotions||{}),...oldOppMotions};
-    if(!Object.keys(S._oppMotions||{}).length) S._oppMotions=null;
-    S._swap8Mode=null;
-    renderMyHand();renderSeats();renderActions();
-    requestAnimationFrame(()=>{
-      layer.classList.add('leaving');
-      setTimeout(()=>layer.remove(),360);
-    });
-  });
+    const gl = makeGhost(sr);
+    const gr = makeGhost(dr);
+
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const DUR = '.85s cubic-bezier(.4,0,.2,1)';
+      gl.style.transition = `all ${DUR}`;
+      gl.style.left = dr.left + 'px';
+      gl.style.top  = dr.top  + 'px';
+
+      gr.style.transition = `all ${DUR}`;
+      gr.style.left = sr.left + 'px';
+      gr.style.top  = sr.top  + 'px';
+    }));
+
+    setTimeout(() => { gl.remove(); gr.remove(); }, 950);
+  }, 400);
+
+  // Progress bar
+  const prog = overlay.querySelector('#sp');
+  if (prog) {
+    prog.style.width = '100%';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      prog.style.transition = 'width 3.5s linear';
+      prog.style.width = '0%';
+    }));
+  }
+
+  setTimeout(() => {
+    overlay.style.opacity = '0';
+    overlay.style.transition = 'opacity .4s';
+    setTimeout(() => overlay.remove(), 420);
+  }, 3500);
 }
 
 socket.on('game:swap-reveal', ({
@@ -1824,8 +1788,7 @@ socket.on('game:swap-reveal', ({
   const tVisual = String(targetUserId) === String(S.userId)
     ? Math.max(0, (S.handOrder || []).indexOf(targetCardIndex))
     : targetCardIndex;
-  showSwapAnimation(initiatorUserId, targetUserId, initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
-  S._swap8Mode=null;
+  showSwapAnimation(initiatorUsername, targetUsername, iCount, tCount, iVisual, tVisual);
   addLog(`🔄 ${initiatorUsername} → ${targetUsername} scambio carte`, 'gold');
 });
 
@@ -2415,7 +2378,7 @@ window.buioTest = {
     return run;
   },
   // Show swap UI test
-  testSwap(){ showSwapAnimation(S.userId, S.gameState?.players.find(p=>String(p.userId)!==String(S.userId))?.userId, 'Mario','Luigi',4,4,0,3); },
+  testSwap(){ showSwapAnimation('Mario','Luigi',4,4,0,3); },
   testPenalty(userId=S.userId){
     const player=S.gameState?.players.find(p=>String(p.userId)===String(userId));
     animateAttackPenaltyDraw({userId,targetCardCount:(player?.cardCount||4)+1});
