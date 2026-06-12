@@ -8,14 +8,24 @@ const Cards = (() => {
     keep: 950,
     discard: 980,
     forced: 980,
-    opponent: 980,
-    swap: 1100,
+    opponent: 1280,
+    swap: 1500,
   };
 
   function cw() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cw')) || 68; }
   function ch() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ch')) || 104; }
-  function miniW() { return window.matchMedia('(max-width:600px)').matches ? 24 : 28; }
-  function miniH() { return window.matchMedia('(max-width:600px)').matches ? 37 : 43; }
+  function miniSize(axis) {
+    const sample = document.querySelector('.seat .mini-card') || document.querySelector('.mini-card');
+    if (sample) {
+      const value = parseFloat(getComputedStyle(sample)[axis === 'w' ? 'width' : 'height']);
+      if (value) return value;
+    }
+    return window.matchMedia('(max-width:600px)').matches
+      ? (axis === 'w' ? 29 : 45)
+      : (axis === 'w' ? 34 : 52);
+  }
+  function miniW() { return miniSize('w'); }
+  function miniH() { return miniSize('h'); }
 
   function esc(s) {
     return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -63,9 +73,12 @@ const Cards = (() => {
       margin: '0',
       zIndex: String(opts.z || 9990),
       pointerEvents: 'none',
+      boxSizing: 'border-box',
       boxShadow: opts.shadow || '0 10px 30px rgba(0,0,0,.72)',
       transformOrigin: 'center center',
-      willChange: 'left,top,width,height,transform,opacity',
+      transform: 'translate3d(0,0,0) scale(1) rotate(0deg)',
+      willChange: 'transform,opacity',
+      backfaceVisibility: 'hidden',
     });
     document.body.appendChild(g);
     return g;
@@ -106,17 +119,19 @@ const Cards = (() => {
     const arc = opts.arc ?? -55;
     const spin = opts.spin ?? 0;
     const g = makeGhost(from, opts);
-    const started = performance.now();
+    let started = null;
 
     function frame(now) {
+      if (started === null) started = now;
       const raw = Math.min(1, (now - started) / duration);
       const t = ease(raw);
       const lift = Math.sin(Math.PI * raw) * arc;
-      g.style.left = `${lerp(start.left, end.left, t)}px`;
-      g.style.top = `${lerp(start.top, end.top, t) + lift}px`;
-      g.style.width = `${lerp(start.width, end.width, t)}px`;
-      g.style.height = `${lerp(start.height, end.height, t)}px`;
-      g.style.transform = `rotate(${Math.sin(Math.PI * raw) * spin}deg)`;
+      const x = lerp(start.left, end.left, t) - start.left;
+      const y = lerp(start.top, end.top, t) + lift - start.top;
+      const sx = lerp(1, end.width / Math.max(1, start.width), t);
+      const sy = lerp(1, end.height / Math.max(1, start.height), t);
+      const rot = Math.sin(Math.PI * raw) * spin;
+      g.style.transform = `translate3d(${x}px,${y}px,0) scale(${sx},${sy}) rotate(${rot}deg)`;
       g.style.opacity = String(lerp(1, opts.endOpacity ?? 1, Math.max(0, raw - 0.8) / 0.2));
 
       if (raw < 1) {
@@ -126,7 +141,7 @@ const Cards = (() => {
       opts.onDone?.(g);
     }
 
-    requestAnimationFrame(frame);
+    requestAnimationFrame(() => requestAnimationFrame(frame));
     return g;
   }
 
@@ -301,8 +316,8 @@ const Cards = (() => {
       toH: miniH(),
       face: 'down',
       duration: D.opponent,
-      arc: -32,
-      spin: 5,
+      arc: -42,
+      spin: 3,
       z: 9990,
       onDone: removeOnDone(onLand),
     });
@@ -317,9 +332,9 @@ const Cards = (() => {
       className: 'opp-discard-ghost',
       toW: cw(),
       toH: ch(),
-      duration: D.opponent,
-      arc: -58,
-      spin: -8,
+      duration: D.opponent + 120,
+      arc: -68,
+      spin: -5,
       z: 9995,
       onDone: landOnPile(onLand),
     });
@@ -333,9 +348,9 @@ const Cards = (() => {
       className: 'opp-keep-ghost',
       toW: miniW(),
       toH: miniH(),
-      duration: D.opponent,
-      arc: -20,
-      spin: 3,
+      duration: D.opponent + 80,
+      arc: -30,
+      spin: 2,
       z: 9994,
       onDone: removeOnDone(onLand),
     });
